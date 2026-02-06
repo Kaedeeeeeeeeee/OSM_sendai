@@ -44,6 +44,23 @@ namespace OsmSendai.World
             };
         }
 
+        /// <summary>
+        /// Synchronous mesh build for Editor preview (no async I/O).
+        /// </summary>
+        public static TileBuildResult BuildSync(TilePayload payload, HeightmapData heightmap, float tileSizeMeters)
+        {
+            var terrain = heightmap != null
+                ? BuildSubdividedTerrain(tileSizeMeters, heightmap)
+                : BuildFlatTerrain(tileSizeMeters);
+            return new TileBuildResult
+            {
+                TerrainMesh = terrain,
+                BuildingsMesh = BuildBuildings(payload, heightmap, tileSizeMeters),
+                RoadsMesh = BuildRoads(payload, heightmap, tileSizeMeters),
+                WaterMesh = BuildWater(payload, heightmap, tileSizeMeters),
+            };
+        }
+
         private static Mesh BuildSubdividedTerrain(float tileSize, HeightmapData hm)
         {
             var gridW = hm.GridWidth;
@@ -286,7 +303,7 @@ namespace OsmSendai.World
                     }
                 }
 
-                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 16f, yOffset: 0.3f);
+                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 8f, yOffset: 0.15f);
                 builder.AddRibbon(pts, Mathf.Max(1f, r.widthMeters));
                 ListPool<Vector3>.Release(pts);
                 roadCount++;
@@ -325,7 +342,7 @@ namespace OsmSendai.World
                     }
                     // Also sample midpoints of long edges to catch terrain dips
                     // between sparse polygon vertices.
-                    const float kMaxEdge = 16f;
+                    const float kMaxEdge = 8f;
                     for (var v = 0; v < w.vertices.Length; v++)
                     {
                         var a = w.vertices[v];
@@ -360,7 +377,7 @@ namespace OsmSendai.World
                 var r = payload.waterways[i];
                 if (r?.points == null || r.points.Length < 2) continue;
 
-                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 16f, yOffset: 0.1f);
+                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 8f, yOffset: 0.05f);
                 builder.AddRibbon(pts, Mathf.Clamp(r.widthMeters, 1f, 80f));
                 ListPool<Vector3>.Release(pts);
             }

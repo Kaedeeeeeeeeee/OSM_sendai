@@ -35,6 +35,10 @@ namespace OsmSendai.World
         public bool showRoads = true;
         public bool showWater = true;
 
+        [Header("Physics")]
+        public bool enableTerrainCollider = true;
+        public bool enableBuildingCollider = true;
+
         [Header("Debug - Single Tile Mode")]
         [Tooltip("Only load a single tile for debugging")]
         public bool singleTileMode = false;
@@ -73,6 +77,8 @@ namespace OsmSendai.World
                 ShowBuildings = showBuildings,
                 ShowRoads = showRoads,
                 ShowWater = showWater,
+                EnableTerrainCollider = enableTerrainCollider,
+                EnableBuildingCollider = enableBuildingCollider,
                 SingleTileMode = singleTileMode,
                 DebugTileX = debugTileX,
                 DebugTileY = debugTileY,
@@ -85,15 +91,41 @@ namespace OsmSendai.World
         {
             // Light beige/cream terrain (like sidewalks/ground)
             if (terrainMaterial == null) terrainMaterial = CreateLitMaterial(new Color(0.88f, 0.86f, 0.82f, 1f));
-            // Light gray buildings with slight blue tint (like F4Map)
-            if (buildingsMaterial == null) buildingsMaterial = CreateLitMaterial(new Color(0.85f, 0.85f, 0.90f, 1f));
-            // Dark gray roads (clearly visible against terrain)
-            if (roadsMaterial == null) roadsMaterial = CreateLitMaterial(new Color(0.35f, 0.35f, 0.38f, 1f));
-            // Blue water
-            if (waterMaterial == null) waterMaterial = CreateLitMaterial(new Color(0.3f, 0.5f, 0.85f, 0.75f), transparent: true);
+            // Light gray buildings with slight blue tint (like F4Map).
+            // Render queue Geometry+3 so buildings draw after water (G+1) and roads (G+2).
+            if (buildingsMaterial == null)
+            {
+                buildingsMaterial = CreateLitMaterial(new Color(0.85f, 0.85f, 0.90f, 1f));
+                buildingsMaterial.renderQueue = 2003;
+            }
+            // Dark gray roads — uses depth-offset shader to avoid terrain clipping
+            if (roadsMaterial == null) roadsMaterial = CreateGroundOverlayMaterial(new Color(0.35f, 0.35f, 0.38f, 1f), transparent: false);
+            // Blue water — uses depth-offset transparent shader
+            if (waterMaterial == null) waterMaterial = CreateGroundOverlayMaterial(new Color(0.3f, 0.5f, 0.85f, 0.75f), transparent: true);
         }
 
-        private static Material CreateLitMaterial(Color color, bool transparent = false)
+        /// <summary>
+        /// Creates a material using the GroundOverlay shader (with depth offset)
+        /// so that roads/water render on top of terrain without z-fighting.
+        /// Falls back to a standard Lit material if the shader is not found.
+        /// </summary>
+        private static Material CreateGroundOverlayMaterial(Color color, bool transparent)
+        {
+            var shaderName = transparent ? "OSMSendai/GroundOverlayTransparent" : "OSMSendai/GroundOverlay";
+            var shader = Shader.Find(shaderName);
+            if (shader != null)
+            {
+                var mat = new Material(shader);
+                mat.SetColor("_BaseColor", color);
+                return mat;
+            }
+
+            // Fallback: use standard Lit material if custom shader not found.
+            Debug.LogWarning($"[WorldBootstrap] Shader '{shaderName}' not found, falling back to Lit material.");
+            return CreateLitMaterial(color, transparent);
+        }
+
+        public static Material CreateLitMaterial(Color color, bool transparent = false)
         {
             var useUrp = GraphicsSettings.currentRenderPipeline != null &&
                          GraphicsSettings.currentRenderPipeline.GetType().Name.Contains("UniversalRenderPipelineAsset");

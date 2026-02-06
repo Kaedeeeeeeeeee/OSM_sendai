@@ -64,6 +64,43 @@ namespace OsmSendai.Data
             }
         }
 
+        // ── Synchronous API for Editor preview ──
+
+        public TilesetMetadata LoadTilesetSync()
+        {
+            var fullPath = Path.Combine(Application.streamingAssetsPath, _rootFolder, "tileset.json");
+            if (!File.Exists(fullPath)) return new TilesetMetadata();
+            var json = File.ReadAllText(fullPath);
+            if (string.IsNullOrWhiteSpace(json)) return new TilesetMetadata();
+            return JsonUtility.FromJson<TilesetMetadata>(json) ?? new TilesetMetadata();
+        }
+
+        public TilePayload TryLoadTileSync(int lod, int tx, int ty)
+        {
+            var filename = $"tile_{lod}_{tx}_{ty}.json";
+            var fullPath = Path.Combine(Application.streamingAssetsPath, _rootFolder, "tiles", filename);
+            if (!File.Exists(fullPath)) return null;
+            try
+            {
+                var json = File.ReadAllText(fullPath);
+                return string.IsNullOrWhiteSpace(json) ? null : JsonUtility.FromJson<TilePayload>(json);
+            }
+            catch { return null; }
+        }
+
+        public HeightmapData TryLoadHeightmapSync(int lod, int tx, int ty)
+        {
+            var filename = $"dem_{lod}_{tx}_{ty}.bin";
+            var fullPath = Path.Combine(Application.streamingAssetsPath, _rootFolder, "dem", filename);
+            if (!File.Exists(fullPath)) return null;
+            try
+            {
+                var bytes = File.ReadAllBytes(fullPath);
+                return (bytes == null || bytes.Length == 0) ? null : ParseHeightmapBinary(bytes);
+            }
+            catch { return null; }
+        }
+
         private static HeightmapData ParseHeightmapBinary(byte[] bytes)
         {
             // Format: [int32 gridW] [int32 gridH] [float32 × gridW*gridH]

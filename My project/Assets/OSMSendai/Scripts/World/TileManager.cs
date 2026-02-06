@@ -20,6 +20,10 @@ namespace OsmSendai.World
         public bool ShowRoads { get; set; } = true;
         public bool ShowWater { get; set; } = true;
 
+        // Physics collision toggles
+        public bool EnableTerrainCollider { get; set; } = true;
+        public bool EnableBuildingCollider { get; set; } = true;
+
         // Debug - single tile mode
         public bool SingleTileMode { get; set; } = false;
         public int DebugTileX { get; set; } = 0;
@@ -116,15 +120,15 @@ namespace OsmSendai.World
             go.transform.SetParent(_root, false);
             go.transform.localPosition = origin;
 
-            var terrain = ShowTerrain ? CreatePart(go.transform, "Terrain", build.TerrainMesh, TerrainMaterial) : null;
-            var buildings = ShowBuildings ? CreatePart(go.transform, "Buildings", build.BuildingsMesh, BuildingsMaterial) : null;
-            var roads = ShowRoads ? CreatePart(go.transform, "Roads", build.RoadsMesh, RoadsMaterial) : null;
-            var water = ShowWater ? CreatePart(go.transform, "Water", build.WaterMesh, WaterMaterial) : null;
+            var terrain = ShowTerrain ? CreatePart(go.transform, "Terrain", build.TerrainMesh, TerrainMaterial, EnableTerrainCollider) : null;
+            var buildings = ShowBuildings ? CreatePart(go.transform, "Buildings", build.BuildingsMesh, BuildingsMaterial, EnableBuildingCollider) : null;
+            var roads = ShowRoads ? CreatePart(go.transform, "Roads", build.RoadsMesh, RoadsMaterial, addCollider: false) : null;
+            var water = ShowWater ? CreatePart(go.transform, "Water", build.WaterMesh, WaterMaterial, addCollider: false) : null;
 
             return new TileInstance(go, terrain, buildings, roads, water);
         }
 
-        private static GameObject CreatePart(Transform parent, string name, Mesh mesh, Material material)
+        private static GameObject CreatePart(Transform parent, string name, Mesh mesh, Material material, bool addCollider)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
@@ -135,6 +139,13 @@ namespace OsmSendai.World
 
             var renderer = go.AddComponent<MeshRenderer>();
             renderer.sharedMaterial = material;
+
+            if (addCollider && mesh != null)
+            {
+                var meshCollider = go.AddComponent<MeshCollider>();
+                meshCollider.sharedMesh = mesh;
+            }
+
             return go;
         }
 
