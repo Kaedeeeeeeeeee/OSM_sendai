@@ -26,6 +26,7 @@ namespace OsmSendai.World
         public Mesh WaterMesh;
         public Mesh LandcoverMesh;
         public Mesh VegetationMesh;
+        public Mesh GrassMesh;
     }
 
     public interface ITileGenerator

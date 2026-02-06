@@ -1,18 +1,18 @@
-Shader "OSMSendai/GroundOverlayAlways"
+Shader "OSMSendai/TerrainVertexColor"
 {
     Properties
     {
-        [MainColor] _BaseColor("Color", Color) = (0.5, 0.5, 0.5, 1)
+        [MainColor] _BaseColor("Color", Color) = (0.88, 0.86, 0.82, 1)
     }
 
-    // -- URP SubShader --
+    // ── URP SubShader ──────────────────────────────────────────────
     SubShader
     {
         Tags
         {
             "RenderType" = "Opaque"
             "RenderPipeline" = "UniversalPipeline"
-            "Queue" = "Geometry+1"
+            "Queue" = "Geometry"
         }
 
         Pass
@@ -20,8 +20,8 @@ Shader "OSMSendai/GroundOverlayAlways"
             Name "ForwardLit"
             Tags { "LightMode" = "UniversalForward" }
 
-            ZWrite Off
-            ZTest Always
+            ZWrite On
+            ZTest LEqual
 
             HLSLPROGRAM
             #pragma vertex vert
@@ -40,6 +40,7 @@ Shader "OSMSendai/GroundOverlayAlways"
             {
                 float4 positionOS : POSITION;
                 float3 normalOS   : NORMAL;
+                half4  color      : COLOR;
             };
 
             struct Varyings
@@ -47,6 +48,7 @@ Shader "OSMSendai/GroundOverlayAlways"
                 float4 positionCS : SV_POSITION;
                 float3 normalWS   : TEXCOORD0;
                 float  fogFactor  : TEXCOORD1;
+                half4  color      : COLOR;
             };
 
             Varyings vert(Attributes IN)
@@ -56,6 +58,7 @@ Shader "OSMSendai/GroundOverlayAlways"
                 OUT.positionCS = pos.positionCS;
                 OUT.normalWS   = TransformObjectToWorldNormal(IN.normalOS);
                 OUT.fogFactor  = ComputeFogFactor(pos.positionCS.z);
+                OUT.color      = IN.color;
                 return OUT;
             }
 
@@ -65,7 +68,8 @@ Shader "OSMSendai/GroundOverlayAlways"
                 Light light = GetMainLight();
                 half NdotL = saturate(dot(n, light.direction));
                 half3 ambient = half3(unity_SHAr.w, unity_SHAg.w, unity_SHAb.w);
-                half3 col = _BaseColor.rgb * (light.color * NdotL + ambient);
+                half3 baseCol = _BaseColor.rgb * IN.color.rgb;
+                half3 col = baseCol * (light.color * NdotL + ambient);
                 col = MixFog(col, IN.fogFactor);
                 return half4(col, 1);
             }
@@ -73,16 +77,14 @@ Shader "OSMSendai/GroundOverlayAlways"
         }
     }
 
-    // -- Built-in pipeline fallback --
+    // ── Built-in pipeline fallback ─────────────────────────────────
     SubShader
     {
-        Tags { "RenderType" = "Opaque" "Queue" = "Geometry+1" }
+        Tags { "RenderType" = "Opaque" "Queue" = "Geometry" }
 
         Pass
         {
             Tags { "LightMode" = "ForwardBase" }
-            ZWrite Off
-            ZTest Always
 
             CGPROGRAM
             #pragma vertex vert
@@ -96,12 +98,14 @@ Shader "OSMSendai/GroundOverlayAlways"
             {
                 float4 vertex : POSITION;
                 float3 normal : NORMAL;
+                fixed4 color  : COLOR;
             };
 
             struct v2f
             {
                 float4 pos      : SV_POSITION;
                 float3 normalWS : TEXCOORD0;
+                fixed4 color    : COLOR;
             };
 
             v2f vert(appdata v)
@@ -109,6 +113,7 @@ Shader "OSMSendai/GroundOverlayAlways"
                 v2f o;
                 o.pos = UnityObjectToClipPos(v.vertex);
                 o.normalWS = UnityObjectToWorldNormal(v.normal);
+                o.color = v.color;
                 return o;
             }
 
@@ -116,7 +121,8 @@ Shader "OSMSendai/GroundOverlayAlways"
             {
                 float3 n = normalize(i.normalWS);
                 float NdotL = saturate(dot(n, _WorldSpaceLightPos0.xyz));
-                float3 col = _BaseColor.rgb * (_LightColor0.rgb * NdotL + UNITY_LIGHTMODEL_AMBIENT.rgb);
+                float3 baseCol = _BaseColor.rgb * i.color.rgb;
+                float3 col = baseCol * (_LightColor0.rgb * NdotL + UNITY_LIGHTMODEL_AMBIENT.rgb);
                 return fixed4(col, 1);
             }
             ENDCG

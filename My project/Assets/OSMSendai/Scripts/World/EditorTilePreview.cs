@@ -26,6 +26,7 @@ namespace OsmSendai.World
         public bool showWater = true;
         public bool showLandcover = true;
         public bool showVegetation = true;
+        public bool showGrass = true;
 
         [Header("Materials (optional — auto-created if empty)")]
         public Material terrainMaterial;
@@ -34,6 +35,7 @@ namespace OsmSendai.World
         public Material waterMaterial;
         public Material landcoverMaterial;
         public Material vegetationMaterial;
+        public Material grassMaterial;
 
         [Header("Data")]
         [Tooltip("Folder name inside StreamingAssets.")]

@@ -36,6 +36,7 @@ namespace OsmSendai.World
         public bool showWater = true;
         public bool showLandcover = true;
         public bool showVegetation = true;
+        public bool showGrass = true;
 
         [Header("Physics")]
         public bool enableTerrainCollider = true;
@@ -54,6 +55,7 @@ namespace OsmSendai.World
         public Material waterMaterial;
         public Material landcoverMaterial;
         public Material vegetationMaterial;
+        public Material grassMaterial;
 
         private TileManager _tileManager;
         private ITileGenerator _generator;
@@ -85,6 +87,8 @@ namespace OsmSendai.World
                 ShowWater = showWater,
                 ShowLandcover = showLandcover,
                 ShowVegetation = showVegetation,
+                ShowGrass = showGrass,
+                GrassMaterial = grassMaterial,
                 EnableTerrainCollider = enableTerrainCollider,
                 EnableBuildingCollider = enableBuildingCollider,
                 SingleTileMode = singleTileMode,
@@ -97,8 +101,21 @@ namespace OsmSendai.World
 
         private void EnsureDefaultMaterials()
         {
-            // Light beige/cream terrain (like sidewalks/ground)
-            if (terrainMaterial == null) terrainMaterial = CreateLitMaterial(new Color(0.88f, 0.86f, 0.82f, 1f));
+            // Light beige/cream terrain with vertex-color landcover tinting.
+            if (terrainMaterial == null)
+            {
+                var terrainShader = Shader.Find("OSMSendai/TerrainVertexColor");
+                if (terrainShader != null)
+                {
+                    terrainMaterial = new Material(terrainShader);
+                    terrainMaterial.SetColor("_BaseColor", new Color(0.88f, 0.86f, 0.82f, 1f));
+                }
+                else
+                {
+                    Debug.LogWarning("[WorldBootstrap] Shader 'OSMSendai/TerrainVertexColor' not found, falling back to Lit material.");
+                    terrainMaterial = CreateLitMaterial(new Color(0.88f, 0.86f, 0.82f, 1f));
+                }
+            }
             // Light gray buildings with slight blue tint (like F4Map).
             // Render queue Geometry+3 so buildings draw after water (G+1) and roads (G+2).
             if (buildingsMaterial == null)
@@ -119,6 +136,18 @@ namespace OsmSendai.World
             }
             // Dark green vegetation — standard Lit material
             if (vegetationMaterial == null) vegetationMaterial = CreateLitMaterial(new Color(0.18f, 0.40f, 0.12f, 1f));
+            // Grass geometry shader — generates 3D grass blades on landcover areas
+            if (grassMaterial == null)
+            {
+                var grassShader = Shader.Find("OSMSendai/GrassGeometry");
+                if (grassShader != null)
+                {
+                    grassMaterial = new Material(grassShader);
+                    grassMaterial.SetColor("_Color", new Color(0.25f, 0.45f, 0.15f, 1f));
+                    grassMaterial.SetColor("_Color2", new Color(0.45f, 0.70f, 0.25f, 1f));
+                    grassMaterial.renderQueue = 2001;
+                }
+            }
         }
 
         /// <summary>

@@ -56,7 +56,18 @@ namespace OsmSendai.EditorTools
 
             // Ensure materials.
             if (preview.terrainMaterial == null)
-                preview.terrainMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.88f, 0.86f, 0.82f, 1f));
+            {
+                var terrainShader = Shader.Find("OSMSendai/TerrainVertexColor");
+                if (terrainShader != null)
+                {
+                    preview.terrainMaterial = new Material(terrainShader);
+                    preview.terrainMaterial.SetColor("_BaseColor", new Color(0.88f, 0.86f, 0.82f, 1f));
+                }
+                else
+                {
+                    preview.terrainMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.88f, 0.86f, 0.82f, 1f));
+                }
+            }
             if (preview.buildingsMaterial == null)
                 preview.buildingsMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.85f, 0.85f, 0.90f, 1f));
             if (preview.roadsMaterial == null)
@@ -67,6 +78,17 @@ namespace OsmSendai.EditorTools
                 preview.landcoverMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.35f, 0.55f, 0.25f, 1f));
             if (preview.vegetationMaterial == null)
                 preview.vegetationMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.18f, 0.40f, 0.12f, 1f));
+            if (preview.grassMaterial == null)
+            {
+                var grassShader = Shader.Find("OSMSendai/GrassGeometry");
+                if (grassShader != null)
+                {
+                    preview.grassMaterial = new Material(grassShader);
+                    preview.grassMaterial.SetColor("_Color", new Color(0.25f, 0.45f, 0.15f, 1f));
+                    preview.grassMaterial.SetColor("_Color2", new Color(0.45f, 0.70f, 0.25f, 1f));
+                    preview.grassMaterial.renderQueue = 2001;
+                }
+            }
 
             var r = preview.radiusTiles;
             var total = (2 * r + 1) * (2 * r + 1);
@@ -128,6 +150,9 @@ namespace OsmSendai.EditorTools
 
             if (preview.showVegetation && result.VegetationMesh != null && result.VegetationMesh.vertexCount > 0)
                 CreateSubMesh(tileGo.transform, "Vegetation", result.VegetationMesh, preview.vegetationMaterial);
+
+            if (preview.showGrass && preview.grassMaterial != null && result.GrassMesh != null && result.GrassMesh.vertexCount > 0)
+                CreateSubMesh(tileGo.transform, "Grass", result.GrassMesh, preview.grassMaterial);
         }
 
         private static void CreateSubMesh(Transform parent, string name, Mesh mesh, Material material)

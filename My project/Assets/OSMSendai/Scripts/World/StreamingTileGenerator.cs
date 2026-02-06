@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using OsmSendai.Data;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace OsmSendai.World
 {
@@ -28,7 +29,7 @@ namespace OsmSendai.World
             var heightmap = await _store.TryLoadHeightmapAsync(request.TileId.Lod, request.TileId.X, request.TileId.Y, cancellationToken);
 
             var terrain = heightmap != null
-                ? BuildSubdividedTerrain(request.TileSizeMeters, heightmap)
+                ? BuildSubdividedTerrain(request.TileSizeMeters, heightmap, payload.landcovers)
                 : BuildFlatTerrain(request.TileSizeMeters);
 
             var buildingsMesh = BuildBuildings(payload, heightmap, request.TileSizeMeters);
@@ -36,6 +37,7 @@ namespace OsmSendai.World
             var waterMesh = BuildWater(payload, heightmap, request.TileSizeMeters);
             var landcoverMesh = BuildLandcovers(payload, heightmap, request.TileSizeMeters);
             var vegetationMesh = BuildVegetation(payload, heightmap, request.TileSizeMeters);
+            var grassMesh = BuildGrassBlades(terrain, heightmap, request.TileSizeMeters);
 
             return new TileBuildResult
             {
@@ -45,6 +47,7 @@ namespace OsmSendai.World
                 WaterMesh = waterMesh,
                 LandcoverMesh = landcoverMesh,
                 VegetationMesh = vegetationMesh,
+                GrassMesh = grassMesh,
             };
         }
 
@@ -54,7 +57,7 @@ namespace OsmSendai.World
         public static TileBuildResult BuildSync(TilePayload payload, HeightmapData heightmap, float tileSizeMeters)
         {
             var terrain = heightmap != null
-                ? BuildSubdividedTerrain(tileSizeMeters, heightmap)
+                ? BuildSubdividedTerrain(tileSizeMeters, heightmap, payload.landcovers)
                 : BuildFlatTerrain(tileSizeMeters);
             return new TileBuildResult
             {
@@ -64,10 +67,11 @@ namespace OsmSendai.World
                 WaterMesh = BuildWater(payload, heightmap, tileSizeMeters),
                 LandcoverMesh = BuildLandcovers(payload, heightmap, tileSizeMeters),
                 VegetationMesh = BuildVegetation(payload, heightmap, tileSizeMeters),
+                GrassMesh = BuildGrassBlades(terrain, heightmap, tileSizeMeters),
             };
         }
 
-        private static Mesh BuildSubdividedTerrain(float tileSize, HeightmapData hm)
+        private static Mesh BuildSubdividedTerrain(float tileSize, HeightmapData hm, Landcover[] landcovers)
         {
             var gridW = hm.GridWidth;
             var gridH = hm.GridHeight;
@@ -76,6 +80,37 @@ namespace OsmSendai.World
             var vertCount = gridW * gridH;
             var vertices = new Vector3[vertCount];
             var uvs = new Vector2[vertCount];
+            var colors = new Color[vertCount];
+
+            // Pre-compute AABB for each landcover polygon to skip expensive point-in-polygon tests.
+            var lcCount = landcovers != null ? landcovers.Length : 0;
+            var lcMinX = new float[lcCount];
+            var lcMaxX = new float[lcCount];
+            var lcMinZ = new float[lcCount];
+            var lcMaxZ = new float[lcCount];
+            for (var li = 0; li < lcCount; li++)
+            {
+                var lc = landcovers[li];
+                if (lc?.vertices == null || lc.vertices.Length < 3)
+                {
+                    lcMinX[li] = float.PositiveInfinity; // will never pass AABB test
+                    continue;
+                }
+                float mnX = float.PositiveInfinity, mxX = float.NegativeInfinity;
+                float mnZ = float.PositiveInfinity, mxZ = float.NegativeInfinity;
+                for (var v = 0; v < lc.vertices.Length; v++)
+                {
+                    var p = lc.vertices[v];
+                    if (p.x < mnX) mnX = p.x;
+                    if (p.x > mxX) mxX = p.x;
+                    if (p.y < mnZ) mnZ = p.y;
+                    if (p.y > mxZ) mxZ = p.y;
+                }
+                lcMinX[li] = mnX;
+                lcMaxX[li] = mxX;
+                lcMinZ[li] = mnZ;
+                lcMaxZ[li] = mxZ;
+            }
 
             for (var row = 0; row < gridH; row++)
             {
@@ -91,6 +126,25 @@ namespace OsmSendai.World
                     var idx = row * gridW + col;
                     vertices[idx] = new Vector3(x, y, z);
                     uvs[idx] = new Vector2(uNorm, vNorm);
+
+                    // Test vertex against landcover polygons.
+                    var vertColor = Color.white;
+                    var pt = new Vector2(x, z);
+                    for (var li = 0; li < lcCount; li++)
+                    {
+                        // AABB early-out.
+                        if (x < lcMinX[li] || x > lcMaxX[li] || z < lcMinZ[li] || z > lcMaxZ[li])
+                            continue;
+                        if (PointInPolygon(pt, landcovers[li].vertices))
+                        {
+                            var kind = landcovers[li].kind;
+                            vertColor = kind == "forest"
+                                ? new Color(0.30f, 0.50f, 0.20f)
+                                : new Color(0.50f, 0.70f, 0.30f);
+                            break;
+                        }
+                    }
+                    colors[idx] = vertColor;
                 }
             }
 
@@ -123,8 +177,10 @@ namespace OsmSendai.World
             var mesh = new Mesh { name = "Terrain(DEM)" };
             mesh.vertices = vertices;
             mesh.uv = uvs;
+            mesh.colors = colors;
             mesh.triangles = triangles;
             mesh.RecalculateNormals();
+            mesh.RecalculateTangents(); // Required by grass geometry shader
             mesh.RecalculateBounds();
             return mesh;
         }
@@ -425,31 +481,135 @@ namespace OsmSendai.World
             return inside;
         }
 
-        private static Mesh BuildLandcovers(TilePayload payload, HeightmapData hm, float tileSize)
+        /// <summary>
+        /// Generates grass blade quads from the terrain mesh's vertex colors.
+        /// For each terrain vertex with non-white color (i.e. landcover), places
+        /// a few grass blade quads nearby. Each blade is a vertical quad (4 verts, 2 tris)
+        /// with UV.y = 0 at base, 1 at tip, and vertex color from the terrain.
+        /// </summary>
+        private static Mesh BuildGrassBlades(Mesh terrainMesh, HeightmapData hm, float tileSize)
         {
-            var builder = new MeshBuilder();
-            const float yOffset = 0.15f;
+            if (terrainMesh == null) return new Mesh { name = "Grass(empty)" };
 
-            // Height sampler: per-vertex terrain height + small offset so polygon sits just above terrain.
-            System.Func<float, float, float> sampler = (x, z) => SampleOrZero(hm, x, z, tileSize) + yOffset;
+            var terrainVerts = terrainMesh.vertices;
+            var terrainColors = terrainMesh.colors;
+            if (terrainColors == null || terrainColors.Length == 0)
+                return new Mesh { name = "Grass(empty)" };
 
-            for (var i = 0; i < payload.landcovers.Length; i++)
+            // Count grass vertices to pre-allocate.
+            var grassCount = 0;
+            for (var i = 0; i < terrainColors.Length; i++)
             {
-                var lc = payload.landcovers[i];
-                if (lc?.vertices == null || lc.vertices.Length < 3) continue;
+                var c = terrainColors[i];
+                if (c.r + c.g + c.b < 2.8f) grassCount++;
+            }
 
-                if (!builder.TryAddSampledPolygon(lc.vertices, sampler, Vector3.up))
+            if (grassCount == 0) return new Mesh { name = "Grass(empty)" };
+
+            const int bladesPerVertex = 20;
+            const int vertsPerBlade = 4; // quad
+            const int trisPerBlade = 6;  // 2 triangles
+            var totalBlades = grassCount * bladesPerVertex;
+
+            var vertices = new Vector3[totalBlades * vertsPerBlade];
+            var normals = new Vector3[totalBlades * vertsPerBlade];
+            var uvs = new Vector2[totalBlades * vertsPerBlade];
+            var colors = new Color[totalBlades * vertsPerBlade];
+            var triangles = new int[totalBlades * trisPerBlade];
+
+            const float bladeWidth = 0.06f;
+            const float bladeHeight = 0.4f;
+            const float heightVariation = 0.15f;
+            // Terrain grid is ~32m spacing (1024/32). Spread blades across
+            // the full cell so adjacent vertices overlap slightly.
+            const float spreadRadius = 16f;
+
+            var bladeIdx = 0;
+
+            for (var i = 0; i < terrainVerts.Length; i++)
+            {
+                var c = terrainColors[i];
+                if (c.r + c.g + c.b >= 2.8f) continue; // skip white (no landcover)
+
+                var basePos = terrainVerts[i];
+                // Seed deterministic RNG from vertex position.
+                var seed = (uint)(basePos.x * 73856.093f + basePos.z * 19349.663f + i * 83492.791f);
+                if (seed == 0) seed = 0x9E3779B9u;
+                var rng = new DeterministicRandom(seed);
+
+                for (var b = 0; b < bladesPerVertex; b++)
                 {
-                    // Fallback: AABB at average vertex height.
-                    float avgY = 0f;
-                    for (var v = 0; v < lc.vertices.Length; v++)
-                        avgY += SampleOrZero(hm, lc.vertices[v].x, lc.vertices[v].y, tileSize);
-                    avgY = avgY / lc.vertices.Length + yOffset;
-                    builder.AddFlatPolygonAabb(lc.vertices, avgY, paddingMeters: 0f);
+                    // Random offset within a small radius
+                    var ox = rng.Range(-spreadRadius, spreadRadius);
+                    var oz = rng.Range(-spreadRadius, spreadRadius);
+                    var h = bladeHeight + rng.Range(-heightVariation, heightVariation);
+                    var angle = rng.Range(0f, 3.14159f); // rotation around Y
+
+                    // Blade orientation vector (horizontal direction of the quad face)
+                    var dx = Mathf.Cos(angle) * bladeWidth;
+                    var dz = Mathf.Sin(angle) * bladeWidth;
+
+                    var rx = basePos.x + ox;
+                    var rz = basePos.z + oz;
+                    var ry = SampleOrZero(hm, rx, rz, tileSize);
+                    var root = new Vector3(rx, ry, rz);
+                    var tip = new Vector3(root.x, root.y + h, root.z);
+
+                    // Normal perpendicular to blade face (horizontal)
+                    var normal = new Vector3(-Mathf.Sin(angle), 0f, Mathf.Cos(angle));
+
+                    var vi = bladeIdx * vertsPerBlade;
+                    var ti = bladeIdx * trisPerBlade;
+
+                    // 4 vertices: bottom-left, bottom-right, top-right, top-left
+                    vertices[vi + 0] = new Vector3(root.x - dx, root.y, root.z - dz);
+                    vertices[vi + 1] = new Vector3(root.x + dx, root.y, root.z + dz);
+                    vertices[vi + 2] = new Vector3(tip.x + dx * 0.3f, tip.y, tip.z + dz * 0.3f);
+                    vertices[vi + 3] = new Vector3(tip.x - dx * 0.3f, tip.y, tip.z - dz * 0.3f);
+
+                    normals[vi + 0] = normal;
+                    normals[vi + 1] = normal;
+                    normals[vi + 2] = normal;
+                    normals[vi + 3] = normal;
+
+                    uvs[vi + 0] = new Vector2(0f, 0f);
+                    uvs[vi + 1] = new Vector2(1f, 0f);
+                    uvs[vi + 2] = new Vector2(1f, 1f);
+                    uvs[vi + 3] = new Vector2(0f, 1f);
+
+                    colors[vi + 0] = c;
+                    colors[vi + 1] = c;
+                    colors[vi + 2] = c;
+                    colors[vi + 3] = c;
+
+                    // Two triangles: 0-2-1, 0-3-2
+                    triangles[ti + 0] = vi + 0;
+                    triangles[ti + 1] = vi + 2;
+                    triangles[ti + 2] = vi + 1;
+                    triangles[ti + 3] = vi + 0;
+                    triangles[ti + 4] = vi + 3;
+                    triangles[ti + 5] = vi + 2;
+
+                    bladeIdx++;
                 }
             }
 
-            return builder.ToMesh("Landcover(OSM)");
+            var mesh = new Mesh { name = "Grass(Blades)" };
+            if (vertices.Length > 65535)
+                mesh.indexFormat = IndexFormat.UInt32;
+            mesh.vertices = vertices;
+            mesh.normals = normals;
+            mesh.uv = uvs;
+            mesh.colors = colors;
+            mesh.triangles = triangles;
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        private static Mesh BuildLandcovers(TilePayload payload, HeightmapData hm, float tileSize)
+        {
+            // Landcover is now rendered via terrain vertex colors — no separate overlay mesh needed.
+            return new Mesh { name = "Landcover(empty)" };
         }
 
         private static Mesh BuildVegetation(TilePayload payload, HeightmapData hm, float tileSize)
