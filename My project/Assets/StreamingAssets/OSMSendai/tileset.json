@@ -1,0 +1,23 @@
+{
+  "projection": "LOCAL_WEBMERCATOR",
+  "tileSizeMeters": 1024.0,
+  "dataVersion": 1,
+  "demLods": [
+    {
+      "lod": 0,
+      "resolutionMeters": 10
+    },
+    {
+      "lod": 1,
+      "resolutionMeters": 30
+    },
+    {
+      "lod": 2,
+      "resolutionMeters": 90
+    }
+  ],
+  "origin": {
+    "lat": 38.26,
+    "lon": 140.8815
+  }
+}

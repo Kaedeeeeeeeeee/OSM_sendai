@@ -1,0 +1,36 @@
+.DS_Store
+*.tmp
+*.bak
+*.swp
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+*.pyc
+
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Mm]emoryCaptures/
+[Uu]ser[Ss]ettings/
+My project/Library/
+My project/Temp/
+My project/Logs/
+My project/UserSettings/
+
+tools/__pycache__/
