@@ -34,3 +34,4 @@ My project/Logs/
 My project/UserSettings/
 
 tools/__pycache__/
+.dem_cache/
