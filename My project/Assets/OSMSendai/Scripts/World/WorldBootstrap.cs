@@ -34,6 +34,8 @@ namespace OsmSendai.World
         public bool showBuildings = true;
         public bool showRoads = true;
         public bool showWater = true;
+        public bool showLandcover = true;
+        public bool showVegetation = true;
 
         [Header("Physics")]
         public bool enableTerrainCollider = true;
@@ -50,6 +52,8 @@ namespace OsmSendai.World
         public Material buildingsMaterial;
         public Material roadsMaterial;
         public Material waterMaterial;
+        public Material landcoverMaterial;
+        public Material vegetationMaterial;
 
         private TileManager _tileManager;
         private ITileGenerator _generator;
@@ -73,10 +77,14 @@ namespace OsmSendai.World
                 BuildingsMaterial = buildingsMaterial,
                 RoadsMaterial = roadsMaterial,
                 WaterMaterial = waterMaterial,
+                LandcoverMaterial = landcoverMaterial,
+                VegetationMaterial = vegetationMaterial,
                 ShowTerrain = showTerrain,
                 ShowBuildings = showBuildings,
                 ShowRoads = showRoads,
                 ShowWater = showWater,
+                ShowLandcover = showLandcover,
+                ShowVegetation = showVegetation,
                 EnableTerrainCollider = enableTerrainCollider,
                 EnableBuildingCollider = enableBuildingCollider,
                 SingleTileMode = singleTileMode,
@@ -102,6 +110,15 @@ namespace OsmSendai.World
             if (roadsMaterial == null) roadsMaterial = CreateGroundOverlayMaterial(new Color(0.35f, 0.35f, 0.38f, 1f), transparent: false);
             // Blue water — uses depth-offset transparent shader
             if (waterMaterial == null) waterMaterial = CreateGroundOverlayMaterial(new Color(0.3f, 0.5f, 0.85f, 0.75f), transparent: true);
+            // Medium green landcover — same GroundOverlay shader as roads (Offset -1,-1 for depth bias).
+            // renderQueue 2001: after terrain (2000), before roads (2002).
+            if (landcoverMaterial == null)
+            {
+                landcoverMaterial = CreateGroundOverlayMaterial(new Color(0.35f, 0.55f, 0.25f, 1f), transparent: false);
+                landcoverMaterial.renderQueue = 2001;
+            }
+            // Dark green vegetation — standard Lit material
+            if (vegetationMaterial == null) vegetationMaterial = CreateLitMaterial(new Color(0.18f, 0.40f, 0.12f, 1f));
         }
 
         /// <summary>

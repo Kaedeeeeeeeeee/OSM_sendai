@@ -242,6 +242,49 @@ namespace OsmSendai.World
             return true;
         }
 
+        /// <summary>
+        /// Like TryAddFlatPolygon but samples a per-vertex Y via a callback so the
+        /// polygon can follow terrain height.
+        /// </summary>
+        public bool TryAddSampledPolygon(Vector2[] footprintXZ, System.Func<float, float, float> sampleY, Vector3 normal)
+        {
+            if (footprintXZ == null || footprintXZ.Length < 3) return false;
+            var pts2 = CleanPolygon(StripDuplicateClosure(footprintXZ));
+            if (pts2.Length < 3) return false;
+            if (!PolygonTriangulator.TryTriangulate(pts2, out var tris)) return false;
+
+            var baseIndex = _vertices.Count;
+            for (var i = 0; i < pts2.Length; i++)
+            {
+                var p = pts2[i];
+                _vertices.Add(new Vector3(p.x, sampleY(p.x, p.y), p.y));
+                _normals.Add(normal);
+                _uvs.Add(new Vector2(0f, 0f));
+            }
+
+            var flip = Vector3.Dot(normal, Vector3.up) < 0f;
+            for (var i = 0; i < tris.Length; i += 3)
+            {
+                var a = baseIndex + tris[i + 0];
+                var b = baseIndex + tris[i + 1];
+                var c = baseIndex + tris[i + 2];
+                if (!flip)
+                {
+                    _triangles.Add(a);
+                    _triangles.Add(b);
+                    _triangles.Add(c);
+                }
+                else
+                {
+                    _triangles.Add(a);
+                    _triangles.Add(c);
+                    _triangles.Add(b);
+                }
+            }
+
+            return true;
+        }
+
         public void AddFlatPolygonAabb(Vector2[] vertices2D, float y, float paddingMeters = 0f)
         {
             if (vertices2D == null || vertices2D.Length < 3) return;
@@ -269,6 +312,40 @@ namespace OsmSendai.World
                 new Vector3(maxX, y, maxZ),
                 new Vector3(minX, y, maxZ),
                 Vector3.up);
+        }
+
+        public void AddCone(Vector3 baseCenter, float baseRadius, float height, int sides)
+        {
+            if (sides < 3) sides = 3;
+            var apex = baseCenter + new Vector3(0f, height, 0f);
+            var angleStep = Mathf.PI * 2f / sides;
+
+            for (var i = 0; i < sides; i++)
+            {
+                var a0 = angleStep * i;
+                var a1 = angleStep * ((i + 1) % sides);
+                var v0 = baseCenter + new Vector3(Mathf.Cos(a0) * baseRadius, 0f, Mathf.Sin(a0) * baseRadius);
+                var v1 = baseCenter + new Vector3(Mathf.Cos(a1) * baseRadius, 0f, Mathf.Sin(a1) * baseRadius);
+
+                // Outward-ish normal for the side face
+                var mid = (v0 + v1) * 0.5f - baseCenter;
+                mid.y = 0f;
+                var normal = mid.normalized;
+
+                var baseIndex = _vertices.Count;
+                _vertices.Add(v0);
+                _vertices.Add(v1);
+                _vertices.Add(apex);
+                _normals.Add(normal);
+                _normals.Add(normal);
+                _normals.Add(Vector3.up);
+                _uvs.Add(new Vector2(0f, 0f));
+                _uvs.Add(new Vector2(1f, 0f));
+                _uvs.Add(new Vector2(0.5f, 1f));
+                _triangles.Add(baseIndex);
+                _triangles.Add(baseIndex + 2);
+                _triangles.Add(baseIndex + 1);
+            }
         }
 
         private static Vector2[] EnsureClockwise(Vector2[] pts)

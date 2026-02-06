@@ -63,6 +63,10 @@ namespace OsmSendai.EditorTools
                 preview.roadsMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.35f, 0.35f, 0.38f, 1f));
             if (preview.waterMaterial == null)
                 preview.waterMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.3f, 0.5f, 0.85f, 0.75f), transparent: true);
+            if (preview.landcoverMaterial == null)
+                preview.landcoverMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.35f, 0.55f, 0.25f, 1f));
+            if (preview.vegetationMaterial == null)
+                preview.vegetationMaterial = WorldBootstrap.CreateLitMaterial(new Color(0.18f, 0.40f, 0.12f, 1f));
 
             var r = preview.radiusTiles;
             var total = (2 * r + 1) * (2 * r + 1);
@@ -118,6 +122,12 @@ namespace OsmSendai.EditorTools
 
             if (preview.showWater && result.WaterMesh != null && result.WaterMesh.vertexCount > 0)
                 CreateSubMesh(tileGo.transform, "Water", result.WaterMesh, preview.waterMaterial);
+
+            if (preview.showLandcover && result.LandcoverMesh != null && result.LandcoverMesh.vertexCount > 0)
+                CreateSubMesh(tileGo.transform, "Landcover", result.LandcoverMesh, preview.landcoverMaterial);
+
+            if (preview.showVegetation && result.VegetationMesh != null && result.VegetationMesh.vertexCount > 0)
+                CreateSubMesh(tileGo.transform, "Vegetation", result.VegetationMesh, preview.vegetationMaterial);
         }
 
         private static void CreateSubMesh(Transform parent, string name, Mesh mesh, Material material)

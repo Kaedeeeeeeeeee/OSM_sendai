@@ -19,6 +19,8 @@ namespace OsmSendai.World
                 BuildingsMesh = BuildBuildings(request.TileSizeMeters, ref rng),
                 RoadsMesh = BuildRoads(request.TileSizeMeters, ref rng),
                 WaterMesh = BuildWater(request.TileSizeMeters, ref rng),
+                LandcoverMesh = null,
+                VegetationMesh = null,
             };
 
             return Task.FromResult(result);

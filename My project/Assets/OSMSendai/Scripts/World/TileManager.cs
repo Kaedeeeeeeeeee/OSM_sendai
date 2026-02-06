@@ -13,12 +13,16 @@ namespace OsmSendai.World
         public Material BuildingsMaterial { get; set; }
         public Material RoadsMaterial { get; set; }
         public Material WaterMaterial { get; set; }
+        public Material LandcoverMaterial { get; set; }
+        public Material VegetationMaterial { get; set; }
 
         // Layer visibility
         public bool ShowTerrain { get; set; } = true;
         public bool ShowBuildings { get; set; } = true;
         public bool ShowRoads { get; set; } = true;
         public bool ShowWater { get; set; } = true;
+        public bool ShowLandcover { get; set; } = true;
+        public bool ShowVegetation { get; set; } = true;
 
         // Physics collision toggles
         public bool EnableTerrainCollider { get; set; } = true;
@@ -124,8 +128,10 @@ namespace OsmSendai.World
             var buildings = ShowBuildings ? CreatePart(go.transform, "Buildings", build.BuildingsMesh, BuildingsMaterial, EnableBuildingCollider) : null;
             var roads = ShowRoads ? CreatePart(go.transform, "Roads", build.RoadsMesh, RoadsMaterial, addCollider: false) : null;
             var water = ShowWater ? CreatePart(go.transform, "Water", build.WaterMesh, WaterMaterial, addCollider: false) : null;
+            var landcover = ShowLandcover ? CreatePart(go.transform, "Landcover", build.LandcoverMesh, LandcoverMaterial, addCollider: false) : null;
+            var vegetation = ShowVegetation ? CreatePart(go.transform, "Vegetation", build.VegetationMesh, VegetationMaterial, addCollider: false) : null;
 
-            return new TileInstance(go, terrain, buildings, roads, water);
+            return new TileInstance(go, terrain, buildings, roads, water, landcover, vegetation);
         }
 
         private static GameObject CreatePart(Transform parent, string name, Mesh mesh, Material material, bool addCollider)

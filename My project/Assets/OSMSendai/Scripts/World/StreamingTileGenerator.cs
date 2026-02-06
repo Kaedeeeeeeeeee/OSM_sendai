@@ -34,6 +34,8 @@ namespace OsmSendai.World
             var buildingsMesh = BuildBuildings(payload, heightmap, request.TileSizeMeters);
             var roadsMesh = BuildRoads(payload, heightmap, request.TileSizeMeters);
             var waterMesh = BuildWater(payload, heightmap, request.TileSizeMeters);
+            var landcoverMesh = BuildLandcovers(payload, heightmap, request.TileSizeMeters);
+            var vegetationMesh = BuildVegetation(payload, heightmap, request.TileSizeMeters);
 
             return new TileBuildResult
             {
@@ -41,6 +43,8 @@ namespace OsmSendai.World
                 BuildingsMesh = buildingsMesh,
                 RoadsMesh = roadsMesh,
                 WaterMesh = waterMesh,
+                LandcoverMesh = landcoverMesh,
+                VegetationMesh = vegetationMesh,
             };
         }
 
@@ -58,6 +62,8 @@ namespace OsmSendai.World
                 BuildingsMesh = BuildBuildings(payload, heightmap, tileSizeMeters),
                 RoadsMesh = BuildRoads(payload, heightmap, tileSizeMeters),
                 WaterMesh = BuildWater(payload, heightmap, tileSizeMeters),
+                LandcoverMesh = BuildLandcovers(payload, heightmap, tileSizeMeters),
+                VegetationMesh = BuildVegetation(payload, heightmap, tileSizeMeters),
             };
         }
 
@@ -383,6 +389,125 @@ namespace OsmSendai.World
             }
 
             return builder.ToMesh("Water(OSM)");
+        }
+
+        /// <summary>
+        /// Shoelace formula — returns unsigned area in m².
+        /// </summary>
+        private static float PolygonArea(Vector2[] pts)
+        {
+            var area = 0f;
+            for (var i = 0; i < pts.Length; i++)
+            {
+                var a = pts[i];
+                var b = pts[(i + 1) % pts.Length];
+                area += a.x * b.y - b.x * a.y;
+            }
+            return Mathf.Abs(area) * 0.5f;
+        }
+
+        /// <summary>
+        /// Ray-casting point-in-polygon test (XY plane, where Y maps to Z in world).
+        /// </summary>
+        private static bool PointInPolygon(Vector2 point, Vector2[] polygon)
+        {
+            var inside = false;
+            for (int i = 0, j = polygon.Length - 1; i < polygon.Length; j = i++)
+            {
+                var pi = polygon[i];
+                var pj = polygon[j];
+                if ((pi.y > point.y) != (pj.y > point.y) &&
+                    point.x < (pj.x - pi.x) * (point.y - pi.y) / (pj.y - pi.y) + pi.x)
+                {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        private static Mesh BuildLandcovers(TilePayload payload, HeightmapData hm, float tileSize)
+        {
+            var builder = new MeshBuilder();
+            const float yOffset = 0.15f;
+
+            // Height sampler: per-vertex terrain height + small offset so polygon sits just above terrain.
+            System.Func<float, float, float> sampler = (x, z) => SampleOrZero(hm, x, z, tileSize) + yOffset;
+
+            for (var i = 0; i < payload.landcovers.Length; i++)
+            {
+                var lc = payload.landcovers[i];
+                if (lc?.vertices == null || lc.vertices.Length < 3) continue;
+
+                if (!builder.TryAddSampledPolygon(lc.vertices, sampler, Vector3.up))
+                {
+                    // Fallback: AABB at average vertex height.
+                    float avgY = 0f;
+                    for (var v = 0; v < lc.vertices.Length; v++)
+                        avgY += SampleOrZero(hm, lc.vertices[v].x, lc.vertices[v].y, tileSize);
+                    avgY = avgY / lc.vertices.Length + yOffset;
+                    builder.AddFlatPolygonAabb(lc.vertices, avgY, paddingMeters: 0f);
+                }
+            }
+
+            return builder.ToMesh("Landcover(OSM)");
+        }
+
+        private static Mesh BuildVegetation(TilePayload payload, HeightmapData hm, float tileSize)
+        {
+            var builder = new MeshBuilder();
+
+            for (var i = 0; i < payload.landcovers.Length; i++)
+            {
+                var lc = payload.landcovers[i];
+                if (lc?.vertices == null || lc.vertices.Length < 3) continue;
+                if (lc.kind != "forest") continue;
+
+                var area = PolygonArea(lc.vertices);
+                var areaKm2 = area / 1_000_000f;
+                var density = lc.densityPerKm2 > 0f ? lc.densityPerKm2 : 800f;
+                var treeCount = Mathf.RoundToInt(areaKm2 * density);
+                if (treeCount <= 0) continue;
+                treeCount = Mathf.Min(treeCount, 2000);
+
+                // Compute AABB for rejection sampling.
+                float minX = float.PositiveInfinity, minZ = float.PositiveInfinity;
+                float maxX = float.NegativeInfinity, maxZ = float.NegativeInfinity;
+                for (var v = 0; v < lc.vertices.Length; v++)
+                {
+                    var p = lc.vertices[v];
+                    if (p.x < minX) minX = p.x;
+                    if (p.y < minZ) minZ = p.y;
+                    if (p.x > maxX) maxX = p.x;
+                    if (p.y > maxZ) maxZ = p.y;
+                }
+
+                // Deterministic random seeded by tile + polygon index.
+                var seed = (uint)(payload.tx * 73856093 ^ payload.ty * 19349663 ^ i * 83492791);
+                var rng = new DeterministicRandom(seed);
+
+                var placed = 0;
+                var maxAttempts = treeCount * 4;
+                for (var attempt = 0; attempt < maxAttempts && placed < treeCount; attempt++)
+                {
+                    var px = rng.Range(minX, maxX);
+                    var pz = rng.Range(minZ, maxZ);
+                    if (!PointInPolygon(new Vector2(px, pz), lc.vertices)) continue;
+
+                    var groundY = SampleOrZero(hm, px, pz, tileSize);
+
+                    // Trunk: 0.4 x 2.5 x 0.4 m box
+                    var trunkCenter = new Vector3(px, groundY + 1.25f, pz);
+                    builder.AddBox(trunkCenter, new Vector3(0.4f, 2.5f, 0.4f));
+
+                    // Canopy: cone, radius 3m, height 5m, 6 sides
+                    var canopyBase = new Vector3(px, groundY + 2.5f, pz);
+                    builder.AddCone(canopyBase, 3f, 5f, 6);
+
+                    placed++;
+                }
+            }
+
+            return builder.ToMesh("Vegetation(OSM)");
         }
 
         private static class ListPool<T>
