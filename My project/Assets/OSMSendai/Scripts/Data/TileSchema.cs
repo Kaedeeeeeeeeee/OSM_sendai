@@ -39,6 +39,8 @@ namespace OsmSendai.Data
         public Polygon[] waters = Array.Empty<Polygon>();
         public Waterway[] waterways = Array.Empty<Waterway>();
         public Landcover[] landcovers = Array.Empty<Landcover>();
+        public Railway[] railways = Array.Empty<Railway>();
+        public Poi[] pois = Array.Empty<Poi>();
     }
 
     [Serializable]
@@ -76,5 +78,46 @@ namespace OsmSendai.Data
         public string kind = "forest"; // forest/grass/park/etc
         public Vector2[] vertices = Array.Empty<Vector2>();
         public float densityPerKm2 = 600f;
+    }
+
+    [Serializable]
+    public sealed class Railway
+    {
+        public Vector2[] points = Array.Empty<Vector2>();
+        public float widthMeters = 4f;
+    }
+
+    [Serializable]
+    public sealed class Poi
+    {
+        public string type = "";
+        public string name = "";
+        public Vector2 position;
+    }
+
+    [Serializable]
+    public sealed class PlaceEntry
+    {
+        public string type = "";
+        public string name = "";
+        public float x;
+        public float y;
+    }
+
+    [Serializable]
+    public sealed class PlacesData
+    {
+        public PlaceEntry[] places = Array.Empty<PlaceEntry>();
+    }
+
+    [Serializable]
+    public sealed class MapMetadata
+    {
+        public int imageWidth;
+        public int imageHeight;
+        public float worldMinX;
+        public float worldMinZ;
+        public float worldMaxX;
+        public float worldMaxZ;
     }
 }

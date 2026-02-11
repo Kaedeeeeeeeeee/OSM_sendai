@@ -64,6 +64,27 @@ namespace OsmSendai.Data
             }
         }
 
+        public async Task<PlacesData> LoadPlacesAsync(CancellationToken cancellationToken)
+        {
+            var json = await ReadTextAsync(Path.Combine(_rootFolder, "places.json"), cancellationToken);
+            if (string.IsNullOrWhiteSpace(json)) return new PlacesData();
+            // places.json is a top-level array — wrap for JsonUtility
+            var wrapped = "{\"places\":" + json + "}";
+            return JsonUtility.FromJson<PlacesData>(wrapped) ?? new PlacesData();
+        }
+
+        public async Task<byte[]> TryLoadMapImageAsync(CancellationToken cancellationToken)
+        {
+            return await ReadBytesAsync(Path.Combine(_rootFolder, "map_overview.png"), cancellationToken);
+        }
+
+        public async Task<MapMetadata> LoadMapMetadataAsync(CancellationToken cancellationToken)
+        {
+            var json = await ReadTextAsync(Path.Combine(_rootFolder, "map_metadata.json"), cancellationToken);
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            return JsonUtility.FromJson<MapMetadata>(json);
+        }
+
         // ── Synchronous API for Editor preview ──
 
         public TilesetMetadata LoadTilesetSync()

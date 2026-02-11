@@ -168,6 +168,35 @@ def iter_shp_records(path: str) -> Iterator[ShpRecord]:
             yield ShpRecord(shape_type=shape_type, parts=parts)
 
 
+def iter_shp_point_records(path: str) -> Iterator[Tuple[float, float]]:
+    """Yield (lon, lat) for Point (type 1), PointZ (11), or PointM (21) shapes."""
+    with open(path, "rb") as f:
+        header = f.read(100)
+        if len(header) != 100:
+            raise ValueError(f"Invalid SHP header: {path}")
+
+        while True:
+            rec_header = f.read(8)
+            if not rec_header or len(rec_header) != 8:
+                break
+            _rec_no, content_len_words = struct.unpack(">2i", rec_header)
+            content_len_bytes = content_len_words * 2
+            content = f.read(content_len_bytes)
+            if len(content) != content_len_bytes:
+                break
+            if content_len_bytes < 4:
+                continue
+            shape_type = struct.unpack("<i", content[:4])[0]
+            if shape_type == 0:
+                continue
+            if shape_type not in (1, 11, 21):
+                continue
+            if len(content) < 20:
+                continue
+            x, y = struct.unpack("<2d", content[4:20])
+            yield (float(x), float(y))
+
+
 class LruAppendWriter:
     def __init__(self, max_open: int = 128) -> None:
         self._max_open = max_open
@@ -623,6 +652,8 @@ def write_tile_jsons(tmp_dir: str, tiles_dir: str) -> int:
             "waters": [],
             "waterways": [],
             "landcovers": [],
+            "railways": [],
+            "pois": [],
         }
         for category, path in cat_files.items():
             key = {
@@ -631,6 +662,8 @@ def write_tile_jsons(tmp_dir: str, tiles_dir: str) -> int:
                 "waters": "waters",
                 "waterways": "waterways",
                 "landcovers": "landcovers",
+                "railways": "railways",
+                "pois": "pois",
             }.get(category)
             if key is None:
                 continue
@@ -888,6 +921,76 @@ def main() -> int:
                             continue
                         points = [{"x": float(x - center_x), "y": float(y - center_y)} for (x, y) in seg]
                         append("waterways", tx, ty, {"kind": wtype, "widthMeters": float(width), "points": points})
+
+    # railways (PolyLine) — only type=rail surface tracks
+    rw_shp = os.path.join(args.shape_dir, "railways.shp")
+    rw_dbf = os.path.join(args.shape_dir, "railways.dbf")
+    if os.path.isfile(rw_shp) and os.path.isfile(rw_dbf):
+        for shp_rec, dbf_rec in zip(iter_shp_records(rw_shp), read_dbf_records(rw_dbf)):
+            rtype = (dbf_rec.get("type", "") or "").lower()
+            if rtype != "rail":
+                continue
+            # Skip unnamed tracks (yard sidings, service tracks) to avoid visual clutter
+            rname = (dbf_rec.get("name", "") or "").strip()
+            if not rname:
+                continue
+            for part in shp_rec.parts:
+                if len(part) < 2:
+                    continue
+                pts_m: List[Tuple[float, float]] = []
+                for lon, lat in part:
+                    x, y = lonlat_to_webmercator_m(lon, lat)
+                    pts_m.append((x - origin_x, y - origin_y))
+                if not keep_line_by_clip(pts_m):
+                    continue
+                tile_segments = split_polyline_by_tiles(pts_m, args.tile_size)
+                for (tx, ty), segments in tile_segments.items():
+                    center_x, center_y = tile_center(tx, ty, args.tile_size)
+                    for seg in segments:
+                        if len(seg) < 2:
+                            continue
+                        points = [{"x": float(x - center_x), "y": float(y - center_y)} for (x, y) in seg]
+                        append("railways", tx, ty, {"widthMeters": 4.0, "points": points})
+
+    # POIs (Point) — station + subway_entrance from points.shp
+    poi_shp = os.path.join(args.shape_dir, "points.shp")
+    poi_dbf = os.path.join(args.shape_dir, "points.dbf")
+    if os.path.isfile(poi_shp) and os.path.isfile(poi_dbf):
+        for (lon, lat), dbf_rec in zip(iter_shp_point_records(poi_shp), read_dbf_records(poi_dbf)):
+            ptype = (dbf_rec.get("type", "") or "").lower()
+            if ptype not in ("station", "subway_entrance"):
+                continue
+            x, y = lonlat_to_webmercator_m(lon, lat)
+            lx = x - origin_x
+            ly = y - origin_y
+            if clip_poly_abs is not None and not point_in_polygon((x, y), clip_poly_abs):
+                continue
+            tx, ty = tile_xy(lx, ly, args.tile_size)
+            center_x, center_y = tile_center(tx, ty, args.tile_size)
+            name = dbf_rec.get("name", "") or ""
+            append("pois", tx, ty, {"type": ptype, "name": name, "position": {"x": float(lx - center_x), "y": float(ly - center_y)}})
+
+    # places (Point) — neighbourhood/quarter/suburb/city for area notifications
+    pl_shp = os.path.join(args.shape_dir, "places.shp")
+    pl_dbf = os.path.join(args.shape_dir, "places.dbf")
+    if os.path.isfile(pl_shp) and os.path.isfile(pl_dbf):
+        places_list: List[Dict[str, Any]] = []
+        for (lon, lat), dbf_rec in zip(iter_shp_point_records(pl_shp), read_dbf_records(pl_dbf)):
+            ptype = (dbf_rec.get("type", "") or "").lower()
+            if ptype not in ("neighbourhood", "quarter", "suburb", "city"):
+                continue
+            name = dbf_rec.get("name", "") or ""
+            if not name:
+                continue
+            x, y = lonlat_to_webmercator_m(lon, lat)
+            lx = x - origin_x
+            ly = y - origin_y
+            places_list.append({"type": ptype, "name": name, "x": float(lx), "y": float(ly)})
+        if places_list:
+            places_path = os.path.join(out_root, "places.json")
+            with open(places_path, "w", encoding="utf-8") as f:
+                json.dump(places_list, f, ensure_ascii=False)
+            print(f"Wrote {len(places_list)} place entries to: {places_path}")
 
     writer.close()
 

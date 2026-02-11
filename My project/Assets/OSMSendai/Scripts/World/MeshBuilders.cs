@@ -93,6 +93,57 @@ namespace OsmSendai.World
             }
         }
 
+        /// <summary>
+        /// Like AddRibbon but generates accumulated-distance UVs along the path.
+        /// UV.x = 0..1 across the width, UV.y = accumulated distance / uvScale along the path.
+        /// This produces continuous, non-repeating UVs suitable for flow animation.
+        /// </summary>
+        public void AddRibbonWithFlowUV(IReadOnlyList<Vector3> points, float width, float uvScale = 10f)
+        {
+            if (points == null || points.Count < 2) return;
+
+            var half = width * 0.5f;
+            var accum = 0f;
+
+            for (var i = 0; i < points.Count - 1; i++)
+            {
+                var a = points[i];
+                var b = points[i + 1];
+                var dir = b - a;
+                dir.y = 0f;
+                var segLen = dir.magnitude;
+                if (segLen < 0.0001f) continue;
+                dir /= segLen;
+                var right = new Vector3(-dir.z, 0f, dir.x);
+
+                var v0 = a - right * half;
+                var v1 = a + right * half;
+                var v2 = b + right * half;
+                var v3 = b - right * half;
+
+                var uA = accum / uvScale;
+                var uB = (accum + segLen) / uvScale;
+
+                var face = Vector3.Cross(v1 - v0, v2 - v0);
+                if (face.sqrMagnitude > 1e-8f && Vector3.Dot(face, Vector3.up) < 0f)
+                    (v1, v3) = (v3, v1);
+
+                var baseIndex = _vertices.Count;
+                _vertices.Add(v0); _vertices.Add(v1);
+                _vertices.Add(v2); _vertices.Add(v3);
+                _normals.Add(Vector3.up); _normals.Add(Vector3.up);
+                _normals.Add(Vector3.up); _normals.Add(Vector3.up);
+                _uvs.Add(new Vector2(0f, uA));
+                _uvs.Add(new Vector2(1f, uA));
+                _uvs.Add(new Vector2(1f, uB));
+                _uvs.Add(new Vector2(0f, uB));
+                _triangles.Add(baseIndex + 0); _triangles.Add(baseIndex + 1); _triangles.Add(baseIndex + 2);
+                _triangles.Add(baseIndex + 0); _triangles.Add(baseIndex + 2); _triangles.Add(baseIndex + 3);
+
+                accum += segLen;
+            }
+        }
+
         public void AddPrism(Vector2[] footprintXZ, float baseY, float heightY)
         {
             if (footprintXZ == null || footprintXZ.Length < 3) return;
@@ -204,18 +255,30 @@ namespace OsmSendai.World
 
         public bool TryAddFlatPolygon(Vector2[] footprintXZ, float y, Vector3 normal)
         {
+            return TryAddFlatPolygon(footprintXZ, y, normal, uvScale: 0f);
+        }
+
+        /// <summary>
+        /// Triangulates a flat polygon. When uvScale > 0, generates planar-mapped
+        /// UVs based on vertex XZ positions (suitable for water / ground materials
+        /// that tile by world position). When uvScale is 0, all UVs are (0,0).
+        /// </summary>
+        public bool TryAddFlatPolygon(Vector2[] footprintXZ, float y, Vector3 normal, float uvScale)
+        {
             if (footprintXZ == null || footprintXZ.Length < 3) return false;
             var pts2 = CleanPolygon(StripDuplicateClosure(footprintXZ));
             if (pts2.Length < 3) return false;
             if (!PolygonTriangulator.TryTriangulate(pts2, out var tris)) return false;
 
             var baseIndex = _vertices.Count;
+            var useWorldUV = uvScale > 0f;
+            var invScale = useWorldUV ? 1f / uvScale : 0f;
             for (var i = 0; i < pts2.Length; i++)
             {
                 var p = pts2[i];
                 _vertices.Add(new Vector3(p.x, y, p.y));
                 _normals.Add(normal);
-                _uvs.Add(new Vector2(0f, 0f));
+                _uvs.Add(useWorldUV ? new Vector2(p.x * invScale, p.y * invScale) : new Vector2(0f, 0f));
             }
 
             // If normal points down, flip winding.

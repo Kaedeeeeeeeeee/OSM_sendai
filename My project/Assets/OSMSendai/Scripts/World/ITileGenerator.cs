@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Threading.Tasks;
+using OsmSendai.Data;
 using UnityEngine;
 
 namespace OsmSendai.World
@@ -26,7 +27,14 @@ namespace OsmSendai.World
         public Mesh WaterMesh;
         public Mesh LandcoverMesh;
         public Mesh VegetationMesh;
-        public Mesh GrassMesh;
+        public Mesh RailwaysMesh;
+        public Mesh PoiMesh;
+        public Poi[] Pois;
+
+        /// <summary>Heightmap data for grass placement elevation sampling.</summary>
+        public HeightmapData Heightmap;
+        /// <summary>Tile size in metres — needed by TileGrassRenderer for heightmap sampling.</summary>
+        public float TileSizeMeters;
     }
 
     public interface ITileGenerator

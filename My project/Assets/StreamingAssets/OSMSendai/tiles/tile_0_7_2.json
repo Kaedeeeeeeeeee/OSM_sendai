@@ -1,1 +1,1 @@
-{"lod": 0, "tx": 7, "ty": 2, "buildings": [], "roads": [{"widthMeters": 6.0, "points": [{"x": -392.4250074196607, "y": -8.012466210871935}, {"x": -442.0735003147274, "y": 544.4347592964768}]}], "waters": [], "waterways": [], "landcovers": []}
+{"lod": 0, "tx": 7, "ty": 2, "buildings": [], "roads": [{"widthMeters": 6.0, "points": [{"x": -392.4250074196607, "y": -8.012466210871935}, {"x": -442.0735003147274, "y": 544.4347592964768}]}], "waters": [], "waterways": [], "landcovers": [], "railways": [], "pois": []}

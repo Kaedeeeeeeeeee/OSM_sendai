@@ -3,7 +3,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using OsmSendai.Data;
 using UnityEngine;
-using UnityEngine.Rendering;
 
 namespace OsmSendai.World
 {
@@ -37,7 +36,8 @@ namespace OsmSendai.World
             var waterMesh = BuildWater(payload, heightmap, request.TileSizeMeters);
             var landcoverMesh = BuildLandcovers(payload, heightmap, request.TileSizeMeters);
             var vegetationMesh = BuildVegetation(payload, heightmap, request.TileSizeMeters);
-            var grassMesh = BuildGrassBlades(terrain, heightmap, request.TileSizeMeters);
+            var railwaysMesh = BuildRailways(payload, heightmap, request.TileSizeMeters);
+            var poiMesh = BuildPois(payload, heightmap, request.TileSizeMeters);
 
             return new TileBuildResult
             {
@@ -47,7 +47,11 @@ namespace OsmSendai.World
                 WaterMesh = waterMesh,
                 LandcoverMesh = landcoverMesh,
                 VegetationMesh = vegetationMesh,
-                GrassMesh = grassMesh,
+                RailwaysMesh = railwaysMesh,
+                PoiMesh = poiMesh,
+                Pois = payload.pois,
+                Heightmap = heightmap,
+                TileSizeMeters = request.TileSizeMeters,
             };
         }
 
@@ -67,7 +71,11 @@ namespace OsmSendai.World
                 WaterMesh = BuildWater(payload, heightmap, tileSizeMeters),
                 LandcoverMesh = BuildLandcovers(payload, heightmap, tileSizeMeters),
                 VegetationMesh = BuildVegetation(payload, heightmap, tileSizeMeters),
-                GrassMesh = BuildGrassBlades(terrain, heightmap, tileSizeMeters),
+                RailwaysMesh = BuildRailways(payload, heightmap, tileSizeMeters),
+                PoiMesh = BuildPois(payload, heightmap, tileSizeMeters),
+                Pois = payload.pois,
+                Heightmap = heightmap,
+                TileSizeMeters = tileSizeMeters,
             };
         }
 
@@ -384,6 +392,9 @@ namespace OsmSendai.World
         {
             var builder = new MeshBuilder();
 
+            // Water UV scale: 10 metres per UV unit — gives good tiling for noise textures.
+            const float kWaterUvScale = 10f;
+
             // Render area water first (lakes/ponds etc).
             for (var i = 0; i < payload.waters.Length; i++)
             {
@@ -426,21 +437,21 @@ namespace OsmSendai.World
                     waterY = minH + 0.05f;
                 }
 
-                if (!builder.TryAddFlatPolygon(w.vertices, y: waterY, normal: Vector3.up))
+                if (!builder.TryAddFlatPolygon(w.vertices, y: waterY, normal: Vector3.up, uvScale: kWaterUvScale))
                 {
                     // Fallback for invalid polygons.
                     builder.AddFlatPolygonAabb(w.vertices, waterY, paddingMeters: 0f);
                 }
             }
 
-            // Render linear waterways (rivers/streams) as ribbons.
+            // Render linear waterways (rivers/streams) as ribbons with flow UVs.
             for (var i = 0; i < payload.waterways.Length; i++)
             {
                 var r = payload.waterways[i];
                 if (r?.points == null || r.points.Length < 2) continue;
 
                 var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 8f, yOffset: 0.05f);
-                builder.AddRibbon(pts, Mathf.Clamp(r.widthMeters, 1f, 80f));
+                builder.AddRibbonWithFlowUV(pts, Mathf.Clamp(r.widthMeters, 1f, 80f), kWaterUvScale);
                 ListPool<Vector3>.Release(pts);
             }
 
@@ -479,131 +490,6 @@ namespace OsmSendai.World
                 }
             }
             return inside;
-        }
-
-        /// <summary>
-        /// Generates grass blade quads from the terrain mesh's vertex colors.
-        /// For each terrain vertex with non-white color (i.e. landcover), places
-        /// a few grass blade quads nearby. Each blade is a vertical quad (4 verts, 2 tris)
-        /// with UV.y = 0 at base, 1 at tip, and vertex color from the terrain.
-        /// </summary>
-        private static Mesh BuildGrassBlades(Mesh terrainMesh, HeightmapData hm, float tileSize)
-        {
-            if (terrainMesh == null) return new Mesh { name = "Grass(empty)" };
-
-            var terrainVerts = terrainMesh.vertices;
-            var terrainColors = terrainMesh.colors;
-            if (terrainColors == null || terrainColors.Length == 0)
-                return new Mesh { name = "Grass(empty)" };
-
-            // Count grass vertices to pre-allocate.
-            var grassCount = 0;
-            for (var i = 0; i < terrainColors.Length; i++)
-            {
-                var c = terrainColors[i];
-                if (c.r + c.g + c.b < 2.8f) grassCount++;
-            }
-
-            if (grassCount == 0) return new Mesh { name = "Grass(empty)" };
-
-            const int bladesPerVertex = 20;
-            const int vertsPerBlade = 4; // quad
-            const int trisPerBlade = 6;  // 2 triangles
-            var totalBlades = grassCount * bladesPerVertex;
-
-            var vertices = new Vector3[totalBlades * vertsPerBlade];
-            var normals = new Vector3[totalBlades * vertsPerBlade];
-            var uvs = new Vector2[totalBlades * vertsPerBlade];
-            var colors = new Color[totalBlades * vertsPerBlade];
-            var triangles = new int[totalBlades * trisPerBlade];
-
-            const float bladeWidth = 0.06f;
-            const float bladeHeight = 0.4f;
-            const float heightVariation = 0.15f;
-            // Terrain grid is ~32m spacing (1024/32). Spread blades across
-            // the full cell so adjacent vertices overlap slightly.
-            const float spreadRadius = 16f;
-
-            var bladeIdx = 0;
-
-            for (var i = 0; i < terrainVerts.Length; i++)
-            {
-                var c = terrainColors[i];
-                if (c.r + c.g + c.b >= 2.8f) continue; // skip white (no landcover)
-
-                var basePos = terrainVerts[i];
-                // Seed deterministic RNG from vertex position.
-                var seed = (uint)(basePos.x * 73856.093f + basePos.z * 19349.663f + i * 83492.791f);
-                if (seed == 0) seed = 0x9E3779B9u;
-                var rng = new DeterministicRandom(seed);
-
-                for (var b = 0; b < bladesPerVertex; b++)
-                {
-                    // Random offset within a small radius
-                    var ox = rng.Range(-spreadRadius, spreadRadius);
-                    var oz = rng.Range(-spreadRadius, spreadRadius);
-                    var h = bladeHeight + rng.Range(-heightVariation, heightVariation);
-                    var angle = rng.Range(0f, 3.14159f); // rotation around Y
-
-                    // Blade orientation vector (horizontal direction of the quad face)
-                    var dx = Mathf.Cos(angle) * bladeWidth;
-                    var dz = Mathf.Sin(angle) * bladeWidth;
-
-                    var rx = basePos.x + ox;
-                    var rz = basePos.z + oz;
-                    var ry = SampleOrZero(hm, rx, rz, tileSize);
-                    var root = new Vector3(rx, ry, rz);
-                    var tip = new Vector3(root.x, root.y + h, root.z);
-
-                    // Normal perpendicular to blade face (horizontal)
-                    var normal = new Vector3(-Mathf.Sin(angle), 0f, Mathf.Cos(angle));
-
-                    var vi = bladeIdx * vertsPerBlade;
-                    var ti = bladeIdx * trisPerBlade;
-
-                    // 4 vertices: bottom-left, bottom-right, top-right, top-left
-                    vertices[vi + 0] = new Vector3(root.x - dx, root.y, root.z - dz);
-                    vertices[vi + 1] = new Vector3(root.x + dx, root.y, root.z + dz);
-                    vertices[vi + 2] = new Vector3(tip.x + dx * 0.3f, tip.y, tip.z + dz * 0.3f);
-                    vertices[vi + 3] = new Vector3(tip.x - dx * 0.3f, tip.y, tip.z - dz * 0.3f);
-
-                    normals[vi + 0] = normal;
-                    normals[vi + 1] = normal;
-                    normals[vi + 2] = normal;
-                    normals[vi + 3] = normal;
-
-                    uvs[vi + 0] = new Vector2(0f, 0f);
-                    uvs[vi + 1] = new Vector2(1f, 0f);
-                    uvs[vi + 2] = new Vector2(1f, 1f);
-                    uvs[vi + 3] = new Vector2(0f, 1f);
-
-                    colors[vi + 0] = c;
-                    colors[vi + 1] = c;
-                    colors[vi + 2] = c;
-                    colors[vi + 3] = c;
-
-                    // Two triangles: 0-2-1, 0-3-2
-                    triangles[ti + 0] = vi + 0;
-                    triangles[ti + 1] = vi + 2;
-                    triangles[ti + 2] = vi + 1;
-                    triangles[ti + 3] = vi + 0;
-                    triangles[ti + 4] = vi + 3;
-                    triangles[ti + 5] = vi + 2;
-
-                    bladeIdx++;
-                }
-            }
-
-            var mesh = new Mesh { name = "Grass(Blades)" };
-            if (vertices.Length > 65535)
-                mesh.indexFormat = IndexFormat.UInt32;
-            mesh.vertices = vertices;
-            mesh.normals = normals;
-            mesh.uv = uvs;
-            mesh.colors = colors;
-            mesh.triangles = triangles;
-            mesh.RecalculateBounds();
-            return mesh;
         }
 
         private static Mesh BuildLandcovers(TilePayload payload, HeightmapData hm, float tileSize)
@@ -668,6 +554,45 @@ namespace OsmSendai.World
             }
 
             return builder.ToMesh("Vegetation(OSM)");
+        }
+
+        private static Mesh BuildRailways(TilePayload payload, HeightmapData hm, float tileSize)
+        {
+            var builder = new MeshBuilder();
+            for (var i = 0; i < payload.railways.Length; i++)
+            {
+                var r = payload.railways[i];
+                if (r?.points == null || r.points.Length < 2) continue;
+
+                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 8f, yOffset: 0.18f);
+                builder.AddRibbon(pts, Mathf.Max(1f, r.widthMeters));
+                ListPool<Vector3>.Release(pts);
+            }
+            return builder.ToMesh("Railways(OSM)");
+        }
+
+        private static Mesh BuildPois(TilePayload payload, HeightmapData hm, float tileSize)
+        {
+            var builder = new MeshBuilder();
+            for (var i = 0; i < payload.pois.Length; i++)
+            {
+                var poi = payload.pois[i];
+                if (poi == null) continue;
+
+                var groundY = SampleOrZero(hm, poi.position.x, poi.position.y, tileSize);
+
+                if (poi.type == "station")
+                {
+                    var center = new Vector3(poi.position.x, groundY + 7.5f, poi.position.y);
+                    builder.AddBox(center, new Vector3(3f, 15f, 3f));
+                }
+                else if (poi.type == "subway_entrance")
+                {
+                    var center = new Vector3(poi.position.x, groundY + 2.5f, poi.position.y);
+                    builder.AddBox(center, new Vector3(1.5f, 5f, 1.5f));
+                }
+            }
+            return builder.ToMesh("POIs(OSM)");
         }
 
         private static class ListPool<T>

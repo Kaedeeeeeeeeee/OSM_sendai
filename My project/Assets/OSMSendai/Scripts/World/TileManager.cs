@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading;
+using OsmSendai.Data;
 using UnityEngine;
 
 namespace OsmSendai.World
@@ -16,6 +17,11 @@ namespace OsmSendai.World
         public Material LandcoverMaterial { get; set; }
         public Material VegetationMaterial { get; set; }
         public Material GrassMaterial { get; set; }
+        public Mesh GrassBladeMesh { get; set; }
+        public ComputeShader GrassCullingShader { get; set; }
+        public Camera GrassCamera { get; set; }
+        public Material RailwaysMaterial { get; set; }
+        public Material PoiMaterial { get; set; }
 
         // Layer visibility
         public bool ShowTerrain { get; set; } = true;
@@ -25,6 +31,8 @@ namespace OsmSendai.World
         public bool ShowLandcover { get; set; } = true;
         public bool ShowVegetation { get; set; } = true;
         public bool ShowGrass { get; set; } = true;
+        public bool ShowRailways { get; set; } = true;
+        public bool ShowPois { get; set; } = true;
 
         // Physics collision toggles
         public bool EnableTerrainCollider { get; set; } = true;
@@ -132,10 +140,47 @@ namespace OsmSendai.World
             var water = ShowWater ? CreatePart(go.transform, "Water", build.WaterMesh, WaterMaterial, addCollider: false) : null;
             var landcover = ShowLandcover ? CreatePart(go.transform, "Landcover", build.LandcoverMesh, LandcoverMaterial, addCollider: false) : null;
             var vegetation = ShowVegetation ? CreatePart(go.transform, "Vegetation", build.VegetationMesh, VegetationMaterial, addCollider: false) : null;
-            var grass = ShowGrass && GrassMaterial != null && build.GrassMesh != null && build.GrassMesh.vertexCount > 0
-                ? CreatePart(go.transform, "Grass", build.GrassMesh, GrassMaterial, addCollider: false) : null;
+            // GPU-instanced grass via TileGrassRenderer (no mesh part needed)
+            TileGrassRenderer grassRenderer = null;
+            if (ShowGrass && GrassMaterial != null && GrassBladeMesh != null && GrassCullingShader != null
+                && build.TerrainMesh != null && build.TerrainMesh.colors != null && build.TerrainMesh.colors.Length > 0)
+            {
+                grassRenderer = go.AddComponent<TileGrassRenderer>();
+                grassRenderer.Initialize(
+                    build.TerrainMesh, build.Heightmap, build.TileSizeMeters,
+                    GrassMaterial, GrassBladeMesh, GrassCullingShader, GrassCamera);
+            }
+            var railways = ShowRailways ? CreatePart(go.transform, "Railways", build.RailwaysMesh, RailwaysMaterial, addCollider: false) : null;
+            var pois = ShowPois ? CreatePart(go.transform, "POIs", build.PoiMesh, PoiMaterial, addCollider: false) : null;
 
-            return new TileInstance(go, terrain, buildings, roads, water, landcover, vegetation, grass);
+            // Create floating labels for named station POIs
+            if (ShowPois && build.Pois != null)
+            {
+                for (var i = 0; i < build.Pois.Length; i++)
+                {
+                    var poi = build.Pois[i];
+                    if (poi == null || string.IsNullOrEmpty(poi.name) || poi.type != "station") continue;
+                    var labelGo = new GameObject($"Label_{poi.name}");
+                    labelGo.transform.SetParent(go.transform, false);
+                    labelGo.transform.localPosition = new Vector3(poi.position.x, 18f, poi.position.y);
+                    labelGo.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
+                    var tm = labelGo.AddComponent<TextMesh>();
+                    tm.text = poi.name;
+                    tm.fontSize = 48;
+                    tm.characterSize = 0.5f;
+                    tm.anchor = TextAnchor.MiddleCenter;
+                    tm.alignment = TextAlignment.Center;
+                    tm.color = Color.white;
+                    if (WorldBootstrap.JapaneseFont != null)
+                    {
+                        tm.font = WorldBootstrap.JapaneseFont;
+                        labelGo.GetComponent<MeshRenderer>().sharedMaterial = WorldBootstrap.JapaneseFont.material;
+                    }
+                    labelGo.AddComponent<BillboardLabel>();
+                }
+            }
+
+            return new TileInstance(go, terrain, buildings, roads, water, landcover, vegetation, null, railways, pois);
         }
 
         private static GameObject CreatePart(Transform parent, string name, Mesh mesh, Material material, bool addCollider)
