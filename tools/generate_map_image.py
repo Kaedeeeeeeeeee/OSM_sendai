@@ -218,6 +218,23 @@ def main() -> int:
         cx = tx * tile_size + tile_size * 0.5
         cy = ty * tile_size + tile_size * 0.5
 
+        # Landcover polygons — green fill (grass/forest/park)
+        for lc in data.get("landcovers", []):
+            verts = lc.get("vertices", [])
+            if len(verts) < 3:
+                continue
+            pts = []
+            for v in verts:
+                px, py = world_to_pixel(cx + v["x"], cy + v["y"])
+                pts.append((px, py))
+
+            kind = str(lc.get("kind", "grass")).lower()
+            if kind == "forest":
+                fill_scanline(pixels, img_w, img_h, pts, 118, 150, 96)
+            else:
+                # grass / park / meadow and unknown kinds default here
+                fill_scanline(pixels, img_w, img_h, pts, 150, 182, 120)
+
         # Water polygons — blue fill
         for w in data.get("waters", []):
             verts = w.get("vertices", [])

@@ -39,8 +39,8 @@ namespace OsmSendai.World
         private bool _initialized;
 
         // ── tuning constants ──
-        private const int BladesPerVertex = 12;
-        private const float SpreadRadius = 14f;
+        private const int MaxBladesPerVertex = 36;
+        private const float SpreadRadius = 12f;
         private const int ChunkSize = 32;
         private const float MaxViewDistance = 600f;
 
@@ -178,21 +178,22 @@ namespace OsmSendai.World
             var colors = terrainMesh.colors;
             if (colors == null || colors.Length == 0) return null;
 
-            // Count grass-eligible vertices
-            var grassCount = 0;
+            // Count grass-eligible vertices and estimate total blade count.
+            var maxBlades = 0;
             for (var i = 0; i < colors.Length; i++)
             {
                 var c = colors[i];
-                if (c.r + c.g + c.b < 2.8f) grassCount++;
+                if (c.r + c.g + c.b >= 2.8f) continue;
+                var bladesForVertex = Mathf.RoundToInt(MaxBladesPerVertex * c.a);
+                if (bladesForVertex > 0) maxBlades += bladesForVertex;
             }
-            if (grassCount == 0) return null;
+            if (maxBlades == 0) return null;
 
             // Tile world offset — terrain vertex positions are tile-local (centered),
             // but DrawMeshInstancedIndirect renders in world space, so we need to offset.
             var tileWorldPos = transform.localPosition;
 
-            var totalBlades = grassCount * BladesPerVertex;
-            var matrices = new Matrix4x4[totalBlades];
+            var matrices = new Matrix4x4[maxBlades];
             var idx = 0;
 
             for (var i = 0; i < verts.Length; i++)
@@ -200,12 +201,15 @@ namespace OsmSendai.World
                 var c = colors[i];
                 if (c.r + c.g + c.b >= 2.8f) continue;
 
+                var bladesForVertex = Mathf.RoundToInt(MaxBladesPerVertex * c.a);
+                if (bladesForVertex <= 0) continue;
+
                 var basePos = verts[i];
                 var seed = (uint)(basePos.x * 73856.093f + basePos.z * 19349.663f + i * 83492.791f);
                 if (seed == 0) seed = 0x9E3779B9u;
                 var rng = new DeterministicRandom(seed);
 
-                for (var b = 0; b < BladesPerVertex; b++)
+                for (var b = 0; b < bladesForVertex; b++)
                 {
                     var ox = rng.Range(-SpreadRadius, SpreadRadius);
                     var oz = rng.Range(-SpreadRadius, SpreadRadius);
@@ -234,8 +238,8 @@ namespace OsmSendai.World
                 }
             }
 
-            // Trim if some were skipped (shouldn't happen, but safety)
-            if (idx < totalBlades)
+            // Trim if fewer blades than estimated (shouldn't happen, but safety).
+            if (idx < maxBlades)
             {
                 var trimmed = new Matrix4x4[idx];
                 System.Array.Copy(matrices, trimmed, idx);

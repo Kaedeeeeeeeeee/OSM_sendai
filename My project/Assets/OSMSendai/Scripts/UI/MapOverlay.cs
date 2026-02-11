@@ -20,6 +20,9 @@ namespace OsmSendai.UI
         private MapMetadata _meta;
         private FloatingOrigin _floatingOrigin;
         private Transform _player;
+        private Transform _teleportTarget;
+        private OsmSendai.Player.ThirdPersonMotor _playerMotor;
+        private OsmSendai.Player.ThirdPersonOrbitCamera _orbitCamera;
         private PlacesData _placesData;
         private Texture2D _mapTexture;
 
@@ -60,6 +63,9 @@ namespace OsmSendai.UI
             _meta = meta;
             _floatingOrigin = floatingOrigin;
             _player = player;
+            _orbitCamera = ResolveOrbitCamera(player);
+            _playerMotor = ResolvePlayerMotor(player, _orbitCamera);
+            _teleportTarget = ResolveTeleportTarget(player, _playerMotor, _orbitCamera);
             _placesData = placesData;
 
             _mapTexture = new Texture2D(2, 2, TextureFormat.RGB24, false);
@@ -445,11 +451,12 @@ namespace OsmSendai.UI
 
         private void UpdatePlayerMarker()
         {
-            if (_player == null || _playerMarkerRect == null) return;
+            var markerTransform = _teleportTarget != null ? _teleportTarget : _player;
+            if (markerTransform == null || _playerMarkerRect == null) return;
 
             var offset = _floatingOrigin != null ? _floatingOrigin.accumulatedOffset : Vector3.zero;
-            var gx = (float)(_player.position.x + offset.x);
-            var gz = (float)(_player.position.z + offset.z);
+            var gx = (float)(markerTransform.position.x + offset.x);
+            var gz = (float)(markerTransform.position.z + offset.z);
 
             var uv = WorldToUV(gx, gz);
 
@@ -517,11 +524,12 @@ namespace OsmSendai.UI
             // Center on player at initial zoom
             _zoom = InitialZoom;
 
-            if (_player != null)
+            var markerTransform = _teleportTarget != null ? _teleportTarget : _player;
+            if (markerTransform != null)
             {
                 var offset = _floatingOrigin != null ? _floatingOrigin.accumulatedOffset : Vector3.zero;
-                var gx = (float)(_player.position.x + offset.x);
-                var gz = (float)(_player.position.z + offset.z);
+                var gx = (float)(markerTransform.position.x + offset.x);
+                var gz = (float)(markerTransform.position.z + offset.z);
                 var uv = WorldToUV(gx, gz);
 
                 var playerContentPos = new Vector2(
@@ -540,12 +548,13 @@ namespace OsmSendai.UI
             ApplyTransform();
 
             // Disable player controls
-            if (_player != null)
+            if (_playerMotor != null)
             {
-                var motor = _player.GetComponentInParent<OsmSendai.Player.ThirdPersonMotor>();
-                if (motor != null) motor.enabled = false;
-                var cam = _player.GetComponent<OsmSendai.Player.ThirdPersonOrbitCamera>();
-                if (cam != null) cam.enabled = false;
+                _playerMotor.enabled = false;
+            }
+            if (_orbitCamera != null)
+            {
+                _orbitCamera.enabled = false;
             }
 
             Cursor.lockState = CursorLockMode.None;
@@ -558,12 +567,13 @@ namespace OsmSendai.UI
             _canvas.gameObject.SetActive(false);
 
             // Re-enable player controls
-            if (_player != null)
+            if (_playerMotor != null)
             {
-                var motor = _player.GetComponentInParent<OsmSendai.Player.ThirdPersonMotor>();
-                if (motor != null) motor.enabled = true;
-                var cam = _player.GetComponent<OsmSendai.Player.ThirdPersonOrbitCamera>();
-                if (cam != null) cam.enabled = true;
+                _playerMotor.enabled = true;
+            }
+            if (_orbitCamera != null)
+            {
+                _orbitCamera.enabled = true;
             }
 
             Cursor.lockState = CursorLockMode.Locked;
@@ -574,6 +584,11 @@ namespace OsmSendai.UI
 
         private void TryTeleport()
         {
+            var target = _playerMotor != null
+                ? _playerMotor.transform
+                : (_teleportTarget != null ? _teleportTarget : _player);
+            if (target == null) return;
+
             // Convert mouse position to viewport-local
             if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
                     _viewportRect, Input.mousePosition, null, out var viewportPt))
@@ -599,16 +614,120 @@ namespace OsmSendai.UI
             var localX = world.x - (float)offset.x;
             var localZ = world.y - (float)offset.z;
 
-            // Teleport player
-            if (_player != null)
+            // Teleport player root, not camera transform.
+            var cc = target.GetComponent<CharacterController>();
+            var y = target.position.y;
+            if (TrySampleGroundY(localX, localZ, out var groundY))
             {
-                var cc = _player.GetComponentInParent<CharacterController>();
-                if (cc != null) cc.enabled = false;
-                _player.position = new Vector3(localX, 50f, localZ);
-                if (cc != null) cc.enabled = true;
+                // Keep the controller capsule above terrain to avoid clipping/stuck issues.
+                var capsuleOffset = cc != null
+                    ? Mathf.Max(0.5f, cc.height * 0.5f + cc.skinWidth + 0.05f)
+                    : 1.2f;
+                y = groundY + capsuleOffset;
+            }
+            else if (cc != null)
+            {
+                y = Mathf.Max(y, cc.height * 0.5f + 0.1f);
             }
 
+            if (cc != null) cc.enabled = false;
+            target.position = new Vector3(localX, y, localZ);
+            if (cc != null) cc.enabled = true;
+
             CloseMap();
+        }
+
+        private static OsmSendai.Player.ThirdPersonOrbitCamera ResolveOrbitCamera(Transform markerTransform)
+        {
+            if (markerTransform != null)
+            {
+                var orbit = markerTransform.GetComponent<OsmSendai.Player.ThirdPersonOrbitCamera>();
+                if (orbit != null) return orbit;
+
+                orbit = markerTransform.GetComponentInParent<OsmSendai.Player.ThirdPersonOrbitCamera>();
+                if (orbit != null) return orbit;
+            }
+
+            if (Camera.main != null)
+            {
+                return Camera.main.GetComponent<OsmSendai.Player.ThirdPersonOrbitCamera>();
+            }
+
+            return null;
+        }
+
+        private static OsmSendai.Player.ThirdPersonMotor ResolvePlayerMotor(
+            Transform markerTransform, OsmSendai.Player.ThirdPersonOrbitCamera orbitCamera)
+        {
+            if (markerTransform != null)
+            {
+                var directMotor = markerTransform.GetComponent<OsmSendai.Player.ThirdPersonMotor>();
+                if (directMotor != null) return directMotor;
+
+                var parentMotor = markerTransform.GetComponentInParent<OsmSendai.Player.ThirdPersonMotor>();
+                if (parentMotor != null) return parentMotor;
+            }
+
+            if (orbitCamera != null && orbitCamera.target != null)
+            {
+                var targetMotor = orbitCamera.target.GetComponent<OsmSendai.Player.ThirdPersonMotor>();
+                if (targetMotor != null) return targetMotor;
+
+                targetMotor = orbitCamera.target.GetComponentInParent<OsmSendai.Player.ThirdPersonMotor>();
+                if (targetMotor != null) return targetMotor;
+            }
+
+            return null;
+        }
+
+        private static Transform ResolveTeleportTarget(
+            Transform markerTransform,
+            OsmSendai.Player.ThirdPersonMotor motor,
+            OsmSendai.Player.ThirdPersonOrbitCamera orbitCamera)
+        {
+            if (motor != null) return motor.transform;
+            if (orbitCamera != null && orbitCamera.target != null) return orbitCamera.target;
+            if (markerTransform != null) return markerTransform;
+            return Camera.main != null ? Camera.main.transform : null;
+        }
+
+        private static bool TrySampleGroundY(float worldX, float worldZ, out float groundY)
+        {
+            // Primary hit point from above.
+            var ray = new Ray(new Vector3(worldX, 5000f, worldZ), Vector3.down);
+            var hits = Physics.RaycastAll(ray, 10000f, ~0, QueryTriggerInteraction.Ignore);
+            if (hits == null || hits.Length == 0)
+            {
+                groundY = 0f;
+                return false;
+            }
+
+            Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+            float firstHitY = float.NaN;
+            for (var i = 0; i < hits.Length; i++)
+            {
+                var hit = hits[i];
+                if (hit.collider == null) continue;
+                if (float.IsNaN(firstHitY))
+                {
+                    firstHitY = hit.point.y;
+                }
+
+                if (string.Equals(hit.collider.gameObject.name, "Terrain", StringComparison.Ordinal))
+                {
+                    groundY = hit.point.y;
+                    return true;
+                }
+            }
+
+            if (!float.IsNaN(firstHitY))
+            {
+                groundY = firstHitY;
+                return true;
+            }
+
+            groundY = 0f;
+            return false;
         }
     }
 }

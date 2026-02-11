@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace OsmSendai.Player
 {
@@ -210,8 +211,10 @@ namespace OsmSendai.Player
         private void EnsureDebugVisual()
         {
             const string visualName = "VisualCapsule";
-            if (transform.Find(visualName) != null)
+            var existing = transform.Find(visualName);
+            if (existing != null)
             {
+                ConfigureVisualRenderer(existing.gameObject);
                 return;
             }
 
@@ -227,6 +230,20 @@ namespace OsmSendai.Player
             {
                 Destroy(visualCollider);
             }
+
+            ConfigureVisualRenderer(visual);
+        }
+
+        private static void ConfigureVisualRenderer(GameObject visual)
+        {
+            var renderer = visual.GetComponent<MeshRenderer>();
+            if (renderer == null)
+            {
+                return;
+            }
+
+            renderer.shadowCastingMode = ShadowCastingMode.On;
+            renderer.receiveShadows = true;
         }
     }
 }

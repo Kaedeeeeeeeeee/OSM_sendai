@@ -28,7 +28,7 @@ namespace OsmSendai.World
             var heightmap = await _store.TryLoadHeightmapAsync(request.TileId.Lod, request.TileId.X, request.TileId.Y, cancellationToken);
 
             var terrain = heightmap != null
-                ? BuildSubdividedTerrain(request.TileSizeMeters, heightmap, payload.landcovers)
+                ? BuildSubdividedTerrain(request.TileSizeMeters, heightmap, payload.landcovers, payload.roads, payload.railways)
                 : BuildFlatTerrain(request.TileSizeMeters);
 
             var buildingsMesh = BuildBuildings(payload, heightmap, request.TileSizeMeters);
@@ -61,7 +61,7 @@ namespace OsmSendai.World
         public static TileBuildResult BuildSync(TilePayload payload, HeightmapData heightmap, float tileSizeMeters)
         {
             var terrain = heightmap != null
-                ? BuildSubdividedTerrain(tileSizeMeters, heightmap, payload.landcovers)
+                ? BuildSubdividedTerrain(tileSizeMeters, heightmap, payload.landcovers, payload.roads, payload.railways)
                 : BuildFlatTerrain(tileSizeMeters);
             return new TileBuildResult
             {
@@ -79,7 +79,7 @@ namespace OsmSendai.World
             };
         }
 
-        private static Mesh BuildSubdividedTerrain(float tileSize, HeightmapData hm, Landcover[] landcovers)
+        private static Mesh BuildSubdividedTerrain(float tileSize, HeightmapData hm, Landcover[] landcovers, Road[] roads, Railway[] railways)
         {
             var gridW = hm.GridWidth;
             var gridH = hm.GridHeight;
@@ -120,6 +120,9 @@ namespace OsmSendai.World
                 lcMaxZ[li] = mxZ;
             }
 
+            // Pre-compute AABB for each road/railway polyline (for fast distance queries).
+            var roadSegments = CollectRoadSegments(roads, railways);
+
             for (var row = 0; row < gridH; row++)
             {
                 var z = -half + row * tileSize / (gridH - 1);
@@ -147,11 +150,23 @@ namespace OsmSendai.World
                         {
                             var kind = landcovers[li].kind;
                             vertColor = kind == "forest"
-                                ? new Color(0.30f, 0.50f, 0.20f)
-                                : new Color(0.50f, 0.70f, 0.30f);
+                                ? new Color(0.30f, 0.50f, 0.20f, 1.0f)
+                                : new Color(0.50f, 0.70f, 0.30f, 0.6f);
                             break;
                         }
                     }
+
+                    // Apply road/railway proximity falloff to grass density (alpha channel).
+                    // White vertices (no landcover) keep alpha=1 — the grass system already
+                    // filters them out by RGB, so their alpha is irrelevant.
+                    if (vertColor.r + vertColor.g + vertColor.b < 2.8f)
+                    {
+                        var roadDist = MinDistanceToSegments(pt, roadSegments);
+                        // 5m inner dead-zone (no grass), linear ramp to full density at 25m.
+                        var roadFalloff = Mathf.Clamp01((roadDist - 5f) / 20f);
+                        vertColor.a *= roadFalloff;
+                    }
+
                     colors[idx] = vertColor;
                 }
             }
@@ -403,7 +418,7 @@ namespace OsmSendai.World
 
                 // Use minimum ground height across polygon vertices (with extra
                 // interior samples) for a flat water surface that doesn't clip terrain.
-                float waterY = 0.05f;
+                float waterY = 0.15f;
                 if (hm != null)
                 {
                     float minH = float.PositiveInfinity;
@@ -434,7 +449,7 @@ namespace OsmSendai.World
                             }
                         }
                     }
-                    waterY = minH + 0.05f;
+                    waterY = minH + 0.15f;
                 }
 
                 if (!builder.TryAddFlatPolygon(w.vertices, y: waterY, normal: Vector3.up, uvScale: kWaterUvScale))
@@ -450,7 +465,7 @@ namespace OsmSendai.World
                 var r = payload.waterways[i];
                 if (r?.points == null || r.points.Length < 2) continue;
 
-                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 8f, yOffset: 0.05f);
+                var pts = SubdivideForTerrain(r.points, hm, tileSize, maxSegment: 8f, yOffset: 0.15f);
                 builder.AddRibbonWithFlowUV(pts, Mathf.Clamp(r.widthMeters, 1f, 80f), kWaterUvScale);
                 ListPool<Vector3>.Release(pts);
             }
@@ -490,6 +505,117 @@ namespace OsmSendai.World
                 }
             }
             return inside;
+        }
+
+        /// <summary>
+        /// A pre-processed line segment with an AABB for fast rejection.
+        /// </summary>
+        private struct LineSegment
+        {
+            public Vector2 a, b;
+            public float minX, maxX, minZ, maxZ;
+        }
+
+        /// <summary>
+        /// Collects all road and railway polyline segments into a flat array with AABBs.
+        /// </summary>
+        private static LineSegment[] CollectRoadSegments(Road[] roads, Railway[] railways)
+        {
+            var count = 0;
+            if (roads != null)
+                for (var i = 0; i < roads.Length; i++)
+                    if (roads[i]?.points != null && roads[i].points.Length >= 2)
+                        count += roads[i].points.Length - 1;
+            if (railways != null)
+                for (var i = 0; i < railways.Length; i++)
+                    if (railways[i]?.points != null && railways[i].points.Length >= 2)
+                        count += railways[i].points.Length - 1;
+
+            var segs = new LineSegment[count];
+            var idx = 0;
+
+            if (roads != null)
+            {
+                for (var i = 0; i < roads.Length; i++)
+                {
+                    var pts = roads[i]?.points;
+                    if (pts == null || pts.Length < 2) continue;
+                    for (var j = 0; j < pts.Length - 1; j++)
+                    {
+                        var a = pts[j];
+                        var b = pts[j + 1];
+                        segs[idx].a = a;
+                        segs[idx].b = b;
+                        segs[idx].minX = Mathf.Min(a.x, b.x);
+                        segs[idx].maxX = Mathf.Max(a.x, b.x);
+                        segs[idx].minZ = Mathf.Min(a.y, b.y);
+                        segs[idx].maxZ = Mathf.Max(a.y, b.y);
+                        idx++;
+                    }
+                }
+            }
+
+            if (railways != null)
+            {
+                for (var i = 0; i < railways.Length; i++)
+                {
+                    var pts = railways[i]?.points;
+                    if (pts == null || pts.Length < 2) continue;
+                    for (var j = 0; j < pts.Length - 1; j++)
+                    {
+                        var a = pts[j];
+                        var b = pts[j + 1];
+                        segs[idx].a = a;
+                        segs[idx].b = b;
+                        segs[idx].minX = Mathf.Min(a.x, b.x);
+                        segs[idx].maxX = Mathf.Max(a.x, b.x);
+                        segs[idx].minZ = Mathf.Min(a.y, b.y);
+                        segs[idx].maxZ = Mathf.Max(a.y, b.y);
+                        idx++;
+                    }
+                }
+            }
+
+            return segs;
+        }
+
+        /// <summary>
+        /// Returns the minimum distance from a point to the nearest pre-processed line segment.
+        /// Uses AABB expansion by 25m for early rejection (matches the max falloff distance).
+        /// </summary>
+        private static float MinDistanceToSegments(Vector2 pt, LineSegment[] segs)
+        {
+            const float kMaxRelevantDist = 25f;
+            var best = float.PositiveInfinity;
+            for (var i = 0; i < segs.Length; i++)
+            {
+                // AABB early-out: skip segments whose bounding box (expanded by kMaxRelevantDist)
+                // doesn't contain the query point.
+                if (pt.x < segs[i].minX - kMaxRelevantDist || pt.x > segs[i].maxX + kMaxRelevantDist ||
+                    pt.y < segs[i].minZ - kMaxRelevantDist || pt.y > segs[i].maxZ + kMaxRelevantDist)
+                    continue;
+
+                var d = PointToSegmentDistanceSq(pt, segs[i].a, segs[i].b);
+                if (d < best) best = d;
+            }
+            return Mathf.Sqrt(best);
+        }
+
+        /// <summary>
+        /// Squared distance from point P to line segment AB.
+        /// </summary>
+        private static float PointToSegmentDistanceSq(Vector2 p, Vector2 a, Vector2 b)
+        {
+            var ab = b - a;
+            var ap = p - a;
+            var dot = ab.x * ap.x + ab.y * ap.y;
+            var lenSq = ab.x * ab.x + ab.y * ab.y;
+            if (lenSq < 1e-8f) return ap.x * ap.x + ap.y * ap.y;
+            var t = Mathf.Clamp01(dot / lenSq);
+            var proj = new Vector2(a.x + ab.x * t, a.y + ab.y * t);
+            var dx = p.x - proj.x;
+            var dy = p.y - proj.y;
+            return dx * dx + dy * dy;
         }
 
         private static Mesh BuildLandcovers(TilePayload payload, HeightmapData hm, float tileSize)

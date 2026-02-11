@@ -27,7 +27,7 @@ Shader "OSMSendai/GroundOverlay"
             HLSLPROGRAM
             #pragma vertex vert
             #pragma fragment frag
-            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile_fog
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
@@ -47,7 +47,8 @@ Shader "OSMSendai/GroundOverlay"
             {
                 float4 positionCS : SV_POSITION;
                 float3 normalWS   : TEXCOORD0;
-                float  fogFactor  : TEXCOORD1;
+                float4 shadowCoord : TEXCOORD1;
+                float  fogFactor  : TEXCOORD2;
             };
 
             Varyings vert(Attributes IN)
@@ -56,6 +57,7 @@ Shader "OSMSendai/GroundOverlay"
                 VertexPositionInputs pos = GetVertexPositionInputs(IN.positionOS.xyz);
                 OUT.positionCS = pos.positionCS;
                 OUT.normalWS   = TransformObjectToWorldNormal(IN.normalOS);
+                OUT.shadowCoord = TransformWorldToShadowCoord(pos.positionWS);
                 OUT.fogFactor  = ComputeFogFactor(pos.positionCS.z);
                 return OUT;
             }
@@ -63,10 +65,11 @@ Shader "OSMSendai/GroundOverlay"
             half4 frag(Varyings IN) : SV_Target
             {
                 half3 n = normalize(IN.normalWS);
-                Light light = GetMainLight();
+                Light light = GetMainLight(IN.shadowCoord);
                 half NdotL = saturate(dot(n, light.direction));
+                half direct = NdotL * light.shadowAttenuation;
                 half3 ambient = half3(unity_SHAr.w, unity_SHAg.w, unity_SHAb.w);
-                half3 col = _BaseColor.rgb * (light.color * NdotL + ambient);
+                half3 col = _BaseColor.rgb * (light.color * direct + ambient);
                 col = MixFog(col, IN.fogFactor);
                 return half4(col, 1);
             }
